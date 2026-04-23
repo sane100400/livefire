@@ -86,7 +86,24 @@ stateDiagram-v2
 | 점수 (가용성) | OK 비율 × 10점/라운드 |
 | 시작 점수 | 1000점 |
 | SLA 체크 주기 | 10분 (라운드당 3회) |
-| 허용 모델 | qwen/qwen-2.5-14b · qwen/qwen-2.5-32b · meta-llama/llama-3.1-70b · google/gemma-3-27b · openai/gpt-4o-mini · google/gemini-flash-1.5 · google/gemini-2.0-flash-001 · microsoft/phi-4 · mistralai/mistral-small-3.1 · deepseek/deepseek-chat · xiaomi/mimo |
+
+### 허용 모델 (OpenRouter)
+
+공격 에이전트는 아래 모델만 사용 가능 (`model` 필드에 OpenRouter ID 그대로 입력).
+
+| 공급사 | 모델 ID | 링크 |
+|---|---|---|
+| Qwen | `qwen/qwen-2.5-14b` | [OpenRouter](https://openrouter.ai/qwen/qwen-2.5-14b) |
+| Qwen | `qwen/qwen-2.5-32b` | [OpenRouter](https://openrouter.ai/qwen/qwen-2.5-32b) |
+| Meta | `meta-llama/llama-3.1-70b` | [OpenRouter](https://openrouter.ai/meta-llama/llama-3.1-70b) |
+| Google | `google/gemma-3-27b` | [OpenRouter](https://openrouter.ai/google/gemma-3-27b) |
+| OpenAI | `openai/gpt-4o-mini` | [OpenRouter](https://openrouter.ai/openai/gpt-4o-mini) |
+| Google | `google/gemini-flash-1.5` | [OpenRouter](https://openrouter.ai/google/gemini-flash-1.5) |
+| Google | `google/gemini-2.0-flash-001` | [OpenRouter](https://openrouter.ai/google/gemini-2.0-flash-001) |
+| Microsoft | `microsoft/phi-4` | [OpenRouter](https://openrouter.ai/microsoft/phi-4) |
+| Mistral | `mistralai/mistral-small-3.1` | [OpenRouter](https://openrouter.ai/mistralai/mistral-small-3.1) |
+| DeepSeek | `deepseek/deepseek-chat` | [OpenRouter](https://openrouter.ai/deepseek/deepseek-chat) |
+| Xiaomi | `xiaomi/mimo` | [OpenRouter](https://openrouter.ai/xiaomi/mimo) |
 
 ---
 
