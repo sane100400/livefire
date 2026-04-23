@@ -166,20 +166,20 @@ def ping() -> bool:
 
 # ── scores ─────────────────────────────────────────────────────────────
 
-def init_scores(teams: dict[str, int], credits: dict[str, float]) -> None:
-    """팀 점수/크레딧 초기화 (이미 있으면 무시)."""
+def init_scores(teams: dict[str, int]) -> None:
+    """팀 점수 초기화 (이미 있으면 무시)."""
     with _get_conn() as conn:
         for team_id, score in teams.items():
             conn.execute(
-                "INSERT OR IGNORE INTO scores(team_id, score, credits) VALUES(?,?,?)",
-                (team_id, score, credits.get(team_id, 2.0)),
+                "INSERT OR IGNORE INTO scores(team_id, score) VALUES(?,?)",
+                (team_id, score),
             )
 
 
 def get_all_scores() -> dict[str, dict]:
-    """{ team_id: {score, credits} }"""
-    rows = _get_conn().execute("SELECT team_id, score, credits FROM scores").fetchall()
-    return {r["team_id"]: {"score": r["score"], "credits": r["credits"]} for r in rows}
+    """{ team_id: {score} }"""
+    rows = _get_conn().execute("SELECT team_id, score FROM scores").fetchall()
+    return {r["team_id"]: {"score": r["score"]} for r in rows}
 
 
 def update_score(team_id: str, delta: int) -> None:
@@ -188,28 +188,6 @@ def update_score(team_id: str, delta: int) -> None:
             "UPDATE scores SET score = MAX(0, score + ?) WHERE team_id=?",
             (delta, team_id),
         )
-
-
-def get_credits(team_id: str) -> float:
-    row = _get_conn().execute(
-        "SELECT credits FROM scores WHERE team_id=?", (team_id,)
-    ).fetchone()
-    return row["credits"] if row else 0.0
-
-
-def deduct_credits(team_id: str, amount: float) -> bool:
-    """차감 성공 시 True, 잔액 부족 시 False (atomic)."""
-    with _get_conn() as conn:
-        row = conn.execute(
-            "SELECT credits FROM scores WHERE team_id=?", (team_id,)
-        ).fetchone()
-        if not row or row["credits"] < amount:
-            return False
-        conn.execute(
-            "UPDATE scores SET credits = ROUND(credits - ?, 6) WHERE team_id=?",
-            (amount, team_id),
-        )
-    return True
 
 
 # ── round_attacks ──────────────────────────────────────────────────────
@@ -362,7 +340,7 @@ def query_audit(
 
 # ── migration ──────────────────────────────────────────────────────────
 
-def import_from_json(json_path: str, team_ids: list[str], starting_score: int, starting_credit: float) -> None:
+def import_from_json(json_path: str, team_ids: list[str], starting_score: int) -> None:
     """game_state.json이 존재할 경우 SQLite로 마이그레이션."""
     if not os.path.exists(json_path):
         return
@@ -377,12 +355,11 @@ def import_from_json(json_path: str, team_ids: list[str], starting_score: int, s
         )
         # scores
         scores = data.get("scores", {})
-        credits = data.get("credits", {})
         for tid in team_ids:
             conn.execute(
-                "INSERT INTO scores(team_id, score, credits) VALUES(?,?,?) "
-                "ON CONFLICT(team_id) DO UPDATE SET score=excluded.score, credits=excluded.credits",
-                (tid, scores.get(tid, starting_score), credits.get(tid, starting_credit)),
+                "INSERT INTO scores(team_id, score) VALUES(?,?) "
+                "ON CONFLICT(team_id) DO UPDATE SET score=excluded.score",
+                (tid, scores.get(tid, starting_score)),
             )
         # round_exploits
         current_round = data.get("current_round", 0)

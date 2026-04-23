@@ -17,8 +17,7 @@ from config import (
     TEAMS, STARTING_SCORE, MAX_ATTACKS_ROUND,
     ATTACK_REWARD, ATTACK_PENALTY, AVAILABILITY_BONUS,
     TOTAL_ROUNDS, COORDINATOR_PORT, ADMIN_SECRET,
-    CREDIT_PER_TEAM, TEAM_TOKENS,
-    ATTACK_AGENT_IMAGES, COORDINATOR_URL,
+    TEAM_TOKENS, ATTACK_AGENT_IMAGES, COORDINATOR_URL,
     ALLOWED_MODEL_PREFIXES,
     VULN_SPEC_DIR, DB_PATH,
 )
@@ -39,7 +38,7 @@ def _team_token_key(request: Request) -> str:
 
 limiter = Limiter(key_func=_team_token_key)
 
-state = GameState(list(TEAMS.keys()), STARTING_SCORE, CREDIT_PER_TEAM)
+state = GameState(list(TEAMS.keys()), STARTING_SCORE)
 vuln_specs: dict = {}
 
 
@@ -65,10 +64,10 @@ class AttackRequest(BaseModel):
     attacker_team: str
     target_team: str
     payload: str
+    model: str | None = None
     session_id: str | None = None
     history: list[dict] | None = None
-    step_cost: float = 0.0
-    model: str | None = None
+    step_cost: float = 0.0   # 감사 로그용 (서버에서 강제하지 않음)
 
 
 class FlagSubmitRequest(BaseModel):
@@ -135,13 +134,6 @@ async def attack(request: Request, req: AttackRequest, x_team_token: str = Heade
     if state.get_attack_count(req.attacker_team) >= MAX_ATTACKS_ROUND:
         raise HTTPException(429, f"이번 라운드 공격 횟수 초과 ({MAX_ATTACKS_ROUND}턴 한도)")
 
-    if req.step_cost > 0 and state.get_credit(req.attacker_team) < req.step_cost:
-        raise HTTPException(
-            402,
-            f"크레딧 부족 (잔액 ${state.get_credit(req.attacker_team):.4f}, "
-            f"요청 ${req.step_cost:.4f})"
-        )
-
     # 타겟 서비스에 페이로드 전달
     target = TEAMS[req.target_team]
     url = f"http://{target['ip']}:{target['port']}/chat"
@@ -164,8 +156,6 @@ async def attack(request: Request, req: AttackRequest, x_team_token: str = Heade
     response_text = data.get("response", "")
 
     state.record_attack(req.attacker_team)
-    if req.step_cost > 0:
-        state.deduct_credit(req.attacker_team, req.step_cost)
 
     # 응답에서 flag 패턴 스캔 (공격 에이전트에게 힌트 제공)
     found_flags = scan_response_for_flags(response_text)
@@ -186,10 +176,9 @@ async def attack(request: Request, req: AttackRequest, x_team_token: str = Heade
     return {
         "response": response_text,
         "tool_calls": data.get("tool_calls", []),
-        "flags_found": found_flags,           # 응답에서 발견된 flag 목록
+        "flags_found": found_flags,
         "hint": "발견된 flag를 /submit-flag로 제출하세요" if found_flags else None,
         "turns_remaining": MAX_ATTACKS_ROUND - state.get_attack_count(req.attacker_team),
-        "credit_remaining": state.get_credit(req.attacker_team),
     }
 
 
@@ -378,7 +367,6 @@ def scoreboard():
                 "score": state.scores.get(tid, 0),
                 "turns_used": state.round_attacks.get(tid, 0),
                 "turns_remaining": MAX_ATTACKS_ROUND - state.round_attacks.get(tid, 0),
-                "credit_remaining": state.get_credit(tid),
                 "exploit_count_total": exploit_counts.get(tid, 0),
                 "service_status": service_statuses.get(tid, "UNKNOWN"),
             }

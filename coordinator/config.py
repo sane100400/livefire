@@ -26,8 +26,6 @@ COORDINATOR_PORT    = 9000
 ADMIN_SECRET = os.environ["ADMIN_SECRET"]
 
 # ── 크레딧 ──────────────────────────────────────────────────────────
-CREDIT_PER_TEAM = 2.0   # 팀당 LLM API 크레딧 총액 (USD)
-
 # ── 팀 인증 토큰 (행사 당일 .env에서 로드 후 각 팀에게 배포) ────────
 TEAM_TOKENS = {
     "teamA": os.environ["TOKEN_TEAM_A"],

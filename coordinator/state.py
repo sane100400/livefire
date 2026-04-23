@@ -9,10 +9,9 @@ import db
 
 
 class GameState:
-    def __init__(self, team_ids: list, starting_score: int, starting_credit: float):
+    def __init__(self, team_ids: list, starting_score: int):
         self.team_ids = team_ids
         self.starting_score = starting_score
-        self.starting_credit = starting_credit
 
     # ── 프로퍼티: DB에서 실시간 조회 ──────────────────────────────────
 
@@ -51,16 +50,8 @@ class GameState:
     def load(self, db_path: str, json_path: str = "game_state.json") -> None:
         """DB 초기화 + JSON 마이그레이션(있으면) + 팀 점수 초기화."""
         db.init_db(db_path)
-        db.import_from_json(
-            json_path,
-            self.team_ids,
-            self.starting_score,
-            self.starting_credit,
-        )
-        db.init_scores(
-            {t: self.starting_score for t in self.team_ids},
-            {t: self.starting_credit for t in self.team_ids},
-        )
+        db.import_from_json(json_path, self.team_ids, self.starting_score)
+        db.init_scores({t: self.starting_score for t in self.team_ids})
         db.reset_round_attacks(self.team_ids)
 
     # ── 라운드 제어 ───────────────────────────────────────────────────
@@ -107,14 +98,6 @@ class GameState:
             "score_changes": score_changes,
             "scores_after": scores_after,
         }
-
-    # ── 크레딧 추적 ───────────────────────────────────────────────────
-
-    def get_credit(self, team: str) -> float:
-        return db.get_credits(team)
-
-    def deduct_credit(self, team: str, amount: float) -> bool:
-        return db.deduct_credits(team, amount)
 
     # ── 공격 추적 ─────────────────────────────────────────────────────
 
