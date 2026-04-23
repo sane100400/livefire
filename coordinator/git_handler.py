@@ -2,8 +2,12 @@
 Git Smart HTTP 핸들러 + pre/post-receive 훅 로직.
 
 팀은 서비스 코드를 git push로 제출/패치한다:
-  git remote add organizer http://coordinator:9000/git/teamA
+  git remote add organizer http://teamA:<TEAM_TOKEN>@coordinator:9000/git/teamA
   git push organizer main
+
+인증: HTTP Basic Auth — username=team_id, password=TEAM_TOKEN
+  - git-receive-pack (push): 팀 자신의 토큰만 허용
+  - git-upload-pack (clone/fetch): 인증 필요 없음 (공개 읽기)
 
 FastAPI에 /git/{team_id}/* 로 마운트.
 
@@ -16,12 +20,12 @@ post-receive 로직 (push 수락 후):
   2. 기존 컨테이너 중지
   3. 새 컨테이너 실행 (SLA 타이머 시작)
   4. 현재 라운드 flag 재주입
-  5. DB에 배포 기록
 
 Git bare repo 위치: REPOS_DIR/{team_id}.git
   기본: hackathon/repos/
 """
 import asyncio
+import base64
 import hashlib
 import json
 import logging
@@ -53,6 +57,38 @@ _TEAM_NET = {
 }
 
 router = APIRouter(prefix="/git")
+
+
+# ── 인증 헬퍼 ─────────────────────────────────────────────────────────
+
+def _require_push_auth(team_id: str, authorization: str | None) -> None:
+    """
+    git push(git-receive-pack) 전용 인증.
+
+    HTTP Basic Auth: username=team_id, password=TEAM_TOKEN
+    실패 시 401 + WWW-Authenticate 헤더 반환 (git 클라이언트가 credential 재요청)
+    """
+    from config import TEAM_TOKENS
+
+    _UNAUTHORIZED = HTTPException(
+        status_code=401,
+        detail="Git push 인증 실패",
+        headers={"WWW-Authenticate": f'Basic realm="HSPACE CTF git — {team_id}"'},
+    )
+
+    if not authorization or not authorization.startswith("Basic "):
+        raise _UNAUTHORIZED
+
+    try:
+        decoded = base64.b64decode(authorization[6:]).decode("utf-8")
+    except Exception:
+        raise _UNAUTHORIZED
+
+    username, _, password = decoded.partition(":")
+    expected_token = TEAM_TOKENS.get(team_id, "")
+
+    if not expected_token or username != team_id or password != expected_token:
+        raise _UNAUTHORIZED
 
 
 # ── bare repo 초기화 ───────────────────────────────────────────────────
@@ -182,10 +218,18 @@ exit 0
 # ── FastAPI git smart HTTP 프록시 ──────────────────────────────────────
 
 @router.get("/{team_id}/info/refs")
-async def git_info_refs(team_id: str, service: str = "", request: Request = None):
+async def git_info_refs(
+    team_id: str,
+    request: Request,
+    service: str = "",
+):
     repo_path = _get_repo_or_404(team_id)
     if not service:
         raise HTTPException(400, "dumb HTTP not supported")
+
+    # push advertisement는 인증 필요 (git 클라이언트가 먼저 refs를 요청)
+    if service == "git-receive-pack":
+        _require_push_auth(team_id, request.headers.get("Authorization"))
 
     cmd = [service, "--stateless-rpc", "--advertise-refs", str(repo_path)]
     result = subprocess.run(cmd, capture_output=True, timeout=30)
@@ -205,6 +249,10 @@ async def git_info_refs(team_id: str, service: str = "", request: Request = None
 async def git_service(team_id: str, service: str, request: Request):
     if service not in ("git-upload-pack", "git-receive-pack"):
         raise HTTPException(400, "unknown service")
+
+    # push는 팀 토큰 인증 필수
+    if service == "git-receive-pack":
+        _require_push_auth(team_id, request.headers.get("Authorization"))
 
     repo_path = _get_repo_or_404(team_id)
     body = await request.body()

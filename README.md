@@ -172,9 +172,9 @@ make run &           # uvicorn main:app --port 8000
 # 2. 취약점 검증 (3회 반복)
 make verify          # python ../scripts/verify.py --repeat 3
 
-# 3. git 제출
+# 3. git 제출 (username=팀ID, password=팀 토큰)
 git init
-git remote add organizer http://<코디네이터IP>:9000/git/teamA
+git remote add organizer http://teamA:<TEAM_TOKEN>@<코디네이터IP>:9000/git/teamA
 git add .
 git commit -m "initial submit"
 git push organizer main
@@ -280,12 +280,9 @@ hackathon/
 현재: post-receive 훅이 서비스 코드만 배포, `vuln_spec.json`을 `vuln_specs/teamX.json`에 복사 안 함.  
 필요: 훅 내에서 `git show newrev:vuln_spec.json > /app/vuln_specs/teamA.json` 추가.
 
-**3. git push 팀 인증** (`coordinator/git_handler.py`)  
-현재: HTTP Basic Auth 없음 → 누구나 어느 팀 repo에 push 가능.  
-옵션 A (최소 변경): HTTP Basic Auth — `git remote add organizer http://teamA:<TOKEN>@host:9000/git/teamA`  
-옵션 B (단순화): ZIP 업로드 `POST /admin/submit-service` — git 불필요, 팀 토큰 헤더로 인증  
-옵션 C: SSH 키 기반 (사전 키 배포 필요)  
-검토 내용: [`SPEC_SLA_MONITOR.md § 12`](SPEC_SLA_MONITOR.md#12-git-인증-방식-검토-노트)
+~~**3. git push 팀 인증**~~ ✅ 완료  
+HTTP Basic Auth 구현 — `http://teamA:<TEAM_TOKEN>@host:9000/git/teamA`  
+`git-receive-pack`(push)만 인증 필요, clone/fetch는 공개.
 
 ---
 

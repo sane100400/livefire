@@ -107,13 +107,16 @@ HSPACE{[a-f0-9]{32}}
 ## 서비스 배포 (Git 기반)
 
 ```bash
-# 최초 등록
-git remote add organizer http://coordinator:9000/git/teamA
+# 최초 등록 (username=팀ID, password=배포받은 팀 토큰)
+git remote add organizer http://teamA:<TEAM_TOKEN>@coordinator:9000/git/teamA
 git push organizer main
 
 # 패치 (대회 중 서비스 코드 업데이트)
 git push organizer main
 ```
+
+> credential을 매번 입력하지 않으려면:  
+> `git config credential.helper store` 후 첫 push 시 한 번만 입력하면 저장됨.
 
 **push 시 자동 실행:**
 1. `pre-receive`: Dockerfile 빌드 검증. 대회 중 `vuln_spec.json` 수정 시 **거부**

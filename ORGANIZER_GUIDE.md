@@ -103,12 +103,12 @@ http://<코디네이터IP>:9000/git/teamA
 ```
 팀 ID: teamA
 토큰: <TOKEN_TEAM_A 값>
-git remote: http://<IP>:9000/git/teamA
+git remote: http://teamA:<TOKEN>@<IP>:9000/git/teamA
 
 # 최초 제출
 cd agent_service/
 git init
-git remote add organizer http://<IP>:9000/git/teamA
+git remote add organizer http://teamA:<TOKEN_TEAM_A>@<IP>:9000/git/teamA
 git add .
 git commit -m "initial submit"
 git push organizer main
@@ -118,6 +118,8 @@ git add .
 git commit -m "patch vuln2"
 git push organizer main
 ```
+
+> credential 저장: `git config credential.helper store` → 첫 push 후 자동 저장
 
 ### 제출 전 팀 자가검증 (팀이 직접 실행)
 
