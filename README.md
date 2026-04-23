@@ -86,7 +86,7 @@ stateDiagram-v2
 | 점수 (가용성) | OK 비율 × 10점/라운드 |
 | 시작 점수 | 1000점 |
 | SLA 체크 주기 | 10분 (라운드당 3회) |
-| 허용 모델 | gpt-4o-mini, gemini-flash, qwen-2.5, llama-3.1-70b 등 |
+| 허용 모델 | qwen/qwen-2.5-14b · qwen/qwen-2.5-32b · meta-llama/llama-3.1-70b · google/gemma-3-27b · openai/gpt-4o-mini · google/gemini-flash-1.5 · google/gemini-2.0-flash-001 · microsoft/phi-4 · mistralai/mistral-small-3.1 · deepseek/deepseek-chat · xiaomi/mimo |
 
 ---
 
