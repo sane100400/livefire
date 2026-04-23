@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+dist/
+
+# 시크릿 (절대 커밋 금지)
+coordinator/.env
+*.env
+
+# 런타임 생성 파일
+coordinator/game_state.db
+coordinator/game_state.db-shm
+coordinator/game_state.db-wal
+repos/
+/tmp/
+
+# 검증 리포트
+scripts/validation_report.json
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# 레거시 (SQLite로 대체됨)
+game_state.json

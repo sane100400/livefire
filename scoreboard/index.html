@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="refresh" content="10">
+<title>AI A&D Scoreboard</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #0d1117; color: #e6edf3; font-family: 'Courier New', monospace; padding: 24px; }
+  h1 { font-size: 1.6rem; color: #58a6ff; margin-bottom: 4px; }
+  .meta { font-size: 0.85rem; color: #8b949e; margin-bottom: 24px; }
+  .round-badge {
+    display: inline-block; background: #21262d; border: 1px solid #30363d;
+    border-radius: 6px; padding: 8px 16px; margin-bottom: 24px; font-size: 1rem;
+  }
+  .round-badge .active { color: #3fb950; }
+  .round-badge .inactive { color: #f85149; }
+
+  table { width: 100%; border-collapse: collapse; margin-bottom: 32px; }
+  th { background: #161b22; color: #8b949e; font-size: 0.8rem; text-align: left;
+       padding: 8px 12px; border-bottom: 1px solid #30363d; }
+  td { padding: 10px 12px; border-bottom: 1px solid #21262d; font-size: 0.95rem; }
+  tr:hover td { background: #161b22; }
+  .rank-1 td:first-child { color: #f0e68c; }
+  .rank-2 td:first-child { color: #c0c0c0; }
+  .rank-3 td:first-child { color: #cd7f32; }
+  .score { font-size: 1.1rem; font-weight: bold; color: #58a6ff; }
+  .bar-wrap { background: #21262d; border-radius: 4px; height: 8px; width: 200px; }
+  .bar { background: #238636; border-radius: 4px; height: 8px; transition: width 0.5s; }
+  .attacks { color: #8b949e; font-size: 0.85rem; }
+  .credit { font-size: 0.85rem; }
+  .credit-ok { color: #3fb950; }
+  .credit-low { color: #d29922; }
+  .credit-empty { color: #f85149; }
+  .exploit-tag { background: #f851491a; border: 1px solid #f8514966; color: #f85149;
+                 border-radius: 4px; padding: 2px 6px; font-size: 0.75rem; margin: 2px; display: inline-block; }
+
+  h2 { font-size: 1rem; color: #8b949e; margin-bottom: 12px; }
+  .exploit-list { display: flex; flex-wrap: wrap; gap: 6px; }
+</style>
+</head>
+<body>
+
+<h1>AI Agent Attack &amp; Defense</h1>
+<p class="meta">10초마다 자동 갱신</p>
+
+<div class="round-badge" id="round-info">로딩 중...</div>
+
+<table id="score-table">
+  <thead>
+    <tr>
+      <th>#</th><th>팀</th><th>점수</th><th>점수 비율</th>
+      <th>외부 요청 (이번 라운드)</th><th>크레딧 잔액</th>
+    </tr>
+  </thead>
+  <tbody id="score-body"></tbody>
+</table>
+
+<h2>이번 라운드 익스플로잇</h2>
+<div class="exploit-list" id="exploit-list">없음</div>
+
+<script>
+const COORDINATOR = "http://localhost:9000";
+
+async function refresh() {
+  try {
+    const r = await fetch(`${COORDINATOR}/scoreboard`);
+    const d = await r.json();
+
+    const active = d.round_active;
+    document.getElementById("round-info").innerHTML =
+      `라운드 <strong>${d.round}</strong> / ${d.total_rounds} &nbsp;|&nbsp; ` +
+      `<span class="${active ? 'active' : 'inactive'}">${active ? '● 진행 중' : '○ 대기'}</span>`;
+
+    const maxScore = Math.max(...d.scores.map(t => t.score), 1);
+    const tbody = document.getElementById("score-body");
+    tbody.innerHTML = "";
+    d.scores.forEach((t, i) => {
+      const pct = Math.min(100, Math.round(t.score / maxScore * 100));
+      const rankClass = i === 0 ? "rank-1" : i === 1 ? "rank-2" : i === 2 ? "rank-3" : "";
+      const credit = t.credit_remaining ?? 0;
+      const creditClass = credit > 1.0 ? "credit-ok" : credit > 0.2 ? "credit-low" : "credit-empty";
+      tbody.innerHTML += `
+        <tr class="${rankClass}">
+          <td>${i + 1}</td>
+          <td><strong>${t.name}</strong></td>
+          <td class="score">${t.score.toLocaleString()}</td>
+          <td>
+            <div class="bar-wrap"><div class="bar" style="width:${pct}%"></div></div>
+          </td>
+          <td class="attacks">${t.turns_used} / 10회 사용 (${t.turns_remaining} 남음)</td>
+          <td class="credit ${creditClass}">$${credit.toFixed(4)}</td>
+        </tr>`;
+    });
+
+    const exploitDiv = document.getElementById("exploit-list");
+    if (d.round_exploits.length === 0) {
+      exploitDiv.innerHTML = "<span style='color:#8b949e'>이번 라운드 익스플로잇 없음</span>";
+    } else {
+      exploitDiv.innerHTML = d.round_exploits
+        .map(e => `<span class="exploit-tag">⚔ ${e.attacker} → ${e.defender}</span>`)
+        .join("");
+    }
+  } catch (e) {
+    document.getElementById("round-info").textContent = "코디네이터 연결 실패";
+  }
+}
+
+refresh();
+</script>
+</body>
+</html>

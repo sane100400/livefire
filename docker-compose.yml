@@ -1,0 +1,132 @@
+version: "3.9"
+
+# ── 네트워크 ────────────────────────────────────────────────────────────
+# scoring-net : coordinator 전용 관리 플레인 (팀 서비스는 진입 불가)
+# target-net  : 팀 서비스 6개 (coordinator가 공격 라우팅용으로 접근)
+#
+# 공격 에이전트 컨테이너는 agent_runner.py가 docker run 으로 직접 띄우며
+# scoring-net 에만 연결 → /attack 호출 가능, 타겟 서비스 직접 접근 불가
+networks:
+  scoring-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: "172.20.0.0/24"
+  target-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: "172.21.0.0/24"
+
+services:
+
+  # ── Coordinator ───────────────────────────────────────────────────────
+  coordinator:
+    build: ./coordinator
+    networks:
+      scoring-net:
+        ipv4_address: 172.20.0.2
+      target-net:
+        ipv4_address: 172.21.0.2    # 팀 서비스로 아웃바운드 전용
+    ports:
+      - "9000:9000"                  # 스코어보드/공격 엔드포인트 (호스트 접근)
+    env_file: ./coordinator/.env
+    environment:
+      - COORDINATOR_URL=http://172.20.0.2:9000
+      - VULN_SPEC_DIR=/app/vuln_specs
+      - DB_PATH=/app/game_state.db
+      - ATTACK_DOCKER_NETWORK=hackathon_scoring-net
+    volumes:
+      - ./coordinator/game_state.db:/app/game_state.db  # 영속성 마운트
+      - ./vuln_specs:/app/vuln_specs:ro                 # 읽기전용
+      - /var/run/docker.sock:/var/run/docker.sock        # 에이전트 컨테이너 실행용
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: "512M"
+
+  # ── Scoreboard (static HTML) ──────────────────────────────────────────
+  scoreboard:
+    image: nginx:alpine
+    volumes:
+      - ./scoreboard:/usr/share/nginx/html:ro
+    ports:
+      - "8080:80"
+    networks:
+      - scoring-net
+    restart: unless-stopped
+
+  # ── Team Services (행사 전 팀 이미지 빌드 후 주석 해제) ───────────────
+  # 각 팀 서비스는 target-net에만 연결 — coordinator admin 포트 도달 불가
+  #
+  # teamA-service:
+  #   image: and-service-teamA:latest
+  #   networks:
+  #     target-net:
+  #       ipv4_address: 172.21.0.10
+  #   ports:
+  #     - "8001:8000"
+  #   restart: on-failure:3
+  #   deploy:
+  #     resources:
+  #       limits:
+  #         cpus: "0.5"
+  #         memory: "1G"
+  #
+  # teamB-service:
+  #   image: and-service-teamB:latest
+  #   networks:
+  #     target-net:
+  #       ipv4_address: 172.21.0.11
+  #   ports:
+  #     - "8002:8000"
+  #   restart: on-failure:3
+  #   deploy:
+  #     resources:
+  #       limits:
+  #         cpus: "0.5"
+  #         memory: "1G"
+  #
+  # teamC-service:
+  #   image: and-service-teamC:latest
+  #   networks:
+  #     target-net:
+  #       ipv4_address: 172.21.0.12
+  #   ports:
+  #     - "8003:8000"
+  #   restart: on-failure:3
+  #
+  # teamD-service:
+  #   image: and-service-teamD:latest
+  #   networks:
+  #     target-net:
+  #       ipv4_address: 172.21.0.13
+  #   ports:
+  #     - "8004:8000"
+  #   restart: on-failure:3
+  #
+  # teamE-service:
+  #   image: and-service-teamE:latest
+  #   networks:
+  #     target-net:
+  #       ipv4_address: 172.21.0.14
+  #   ports:
+  #     - "8005:8000"
+  #   restart: on-failure:3
+  #
+  # teamF-service:
+  #   image: and-service-teamF:latest
+  #   networks:
+  #     target-net:
+  #       ipv4_address: 172.21.0.15
+  #   ports:
+  #     - "8006:8000"
+  #   restart: on-failure:3
