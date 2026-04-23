@@ -282,7 +282,10 @@ hackathon/
 
 **3. git push 팀 인증** (`coordinator/git_handler.py`)  
 현재: HTTP Basic Auth 없음 → 누구나 어느 팀 repo에 push 가능.  
-필요: git credential 체크 또는 pre-receive에서 팀 토큰 검증.
+옵션 A (최소 변경): HTTP Basic Auth — `git remote add organizer http://teamA:<TOKEN>@host:9000/git/teamA`  
+옵션 B (단순화): ZIP 업로드 `POST /admin/submit-service` — git 불필요, 팀 토큰 헤더로 인증  
+옵션 C: SSH 키 기반 (사전 키 배포 필요)  
+검토 내용: [`SPEC_SLA_MONITOR.md § 12`](SPEC_SLA_MONITOR.md#12-git-인증-방식-검토-노트)
 
 ---
 
@@ -300,9 +303,9 @@ hackathon/
 현재: 팀 공격 에이전트 이미지를 주최측이 수동으로 빌드해야 함.  
 필요: `repos/teamA.git`에서 checkout → `docker build` 자동화 스크립트.
 
-**7. SLA 주기적 재체크** (`coordinator/app.py` 또는 별도 cron)  
-현재: checker가 라운드 시작 시점에만 실행 → 라운드 중 DOWN 감지 안 됨.  
-필요: 5~10분마다 checker 재실행, `service_status` 테이블 갱신.
+**7. SLA 주기적 재체크 + 비례 보너스** (`coordinator/checker.py`, `coordinator/db.py`)  
+현재: checker가 라운드 시작 1회만 실행. 종료 시 health만 체크. 히스토리 없음.  
+명세: [`SPEC_SLA_MONITOR.md`](SPEC_SLA_MONITOR.md) — 10분 주기 체크, hysteresis, `checker_log` 테이블, 비례 보너스 계산 설계 완료.
 
 **8. 스코어보드 서비스 상태 표시** (`scoreboard/index.html`)  
 현재: 점수·턴·크레딧만 표시.  
