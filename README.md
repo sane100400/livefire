@@ -287,9 +287,11 @@ cd agent_service/
 make run &                # uvicorn --port 8000
 make verify               # 취약점 3회 자가검증
 
-git init
-git remote add organizer http://teamA:<TOKEN>@<IP>:9000/git/teamA
-git push organizer main   # Dockerfile 빌드 검증 → 자동 배포
+python ../scripts/gitctf.py submit \
+  --repo . \
+  --team teamA \
+  --token <TOKEN> \
+  --coordinator http://<IP>:9000
 ```
 
 ### 팀 — 공격 에이전트 / PoC 제출
@@ -327,6 +329,7 @@ hackathon/
 ├── defense_agent/        팀 방어 에이전트 템플릿
 ├── agent_sdk/            run 생성 · /llm · PoC 제출 · git trailer helper
 ├── scripts/
+│   ├── gitctf.py         팀 서비스 제출 helper
 │   ├── verify.py         팀 자가검증 (독립 실행)
 │   ├── preflight_check.py 이벤트 전 원클릭 검증
 │   └── advance_round.py  cron 라운드 전환

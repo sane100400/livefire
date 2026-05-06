@@ -16,11 +16,14 @@
 | attack agent | 상대 repo를 분석하고 공격 PoC를 만드는 자동 에이전트 |
 | defense agent | 맡은 서비스를 자동 패치하는 에이전트 |
 
-서비스는 git으로 제출한다.
+서비스는 `scripts/gitctf.py`로 제출한다. 이 스크립트가 git commit, remote 설정, push를 처리한다.
 
 ```bash
-git remote add organizer http://teamA:<TEAM_TOKEN>@coordinator:9000/git/teamA
-git push organizer main
+python scripts/gitctf.py submit \
+  --repo agent_service \
+  --team teamA \
+  --token <TEAM_TOKEN> \
+  --coordinator http://coordinator:9000
 ```
 
 ---

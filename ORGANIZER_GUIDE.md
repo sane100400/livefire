@@ -93,6 +93,7 @@ ls /opt/hackathon/repos/
 ```
 http://<코디네이터IP>:9000/git/teamA
 ```
+참가자는 보통 raw git 명령 대신 `scripts/gitctf.py` 제출 helper를 사용한다.
 
 ---
 
@@ -103,23 +104,25 @@ http://<코디네이터IP>:9000/git/teamA
 ```
 팀 ID: teamA
 토큰: <TOKEN_TEAM_A 값>
-git remote: http://teamA:<TOKEN>@<IP>:9000/git/teamA
+coordinator: http://<IP>:9000
 
 # 최초 제출
-cd agent_service/
-git init
-git remote add organizer http://teamA:<TOKEN_TEAM_A>@<IP>:9000/git/teamA
-git add .
-git commit -m "initial submit"
-git push organizer main
+python scripts/gitctf.py submit \
+  --repo agent_service \
+  --team teamA \
+  --token <TOKEN_TEAM_A> \
+  --coordinator http://<IP>:9000
 
 # 패치 (대회 중)
-git add .
-git commit -m "patch vuln2"
-git push organizer main
+python scripts/gitctf.py submit \
+  --repo agent_service \
+  --team teamA \
+  --token <TOKEN_TEAM_A> \
+  --coordinator http://<IP>:9000 \
+  --message "patch service"
 ```
 
-> credential 저장: `git config credential.helper store` → 첫 push 후 자동 저장
+> raw git fallback: `git remote add organizer http://teamA:<TOKEN>@<IP>:9000/git/teamA && git push organizer main`
 
 ### 제출 전 팀 자가검증 (팀이 직접 실행)
 
@@ -254,7 +257,7 @@ curl "http://localhost:9000/admin/audit-log?attacker=teamA" \
 
 ### 5-4. 팀 서비스 패치 처리
 
-대회 중 팀이 `git push organizer main`하면 자동으로:
+대회 중 팀이 `scripts/gitctf.py submit` 또는 raw `git push organizer main`을 실행하면 자동으로:
 1. Dockerfile 빌드 검증
 2. `vuln_spec.json` 수정 시 **거부** (21:00 이후 잠금)
 3. Docker 이미지 빌드 → 컨테이너 재시작
@@ -379,6 +382,7 @@ hackathon/
 │   ├── main.py
 │   └── Dockerfile
 ├── scripts/
+│   ├── gitctf.py          팀 서비스 제출 helper
 │   ├── verify.py          팀 자가검증 (신규)
 │   ├── validate_vulns.py  주최측 일괄 검증
 │   ├── preflight_check.py 이벤트 전 사전검증
