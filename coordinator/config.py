@@ -5,14 +5,18 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).with_name(".env"))
 
 # ── 팀 설정 (행사 시작 전 주최측이 IP 채워넣기) ────────────────────
-# 각 팀은 agent_service/ 를 포트 8000으로 실행
+# 각 팀은 agent_service/ 를 기본 포트 8000으로 실행한다.
+def _team_port(team_suffix: str) -> int:
+    return int(os.getenv(f"PORT_TEAM_{team_suffix}", "8000"))
+
+
 TEAMS = {
-    "teamA": {"ip": os.getenv("IP_TEAM_A", "172.21.0.10"), "port": 8000, "name": "Team A"},
-    "teamB": {"ip": os.getenv("IP_TEAM_B", "172.21.0.11"), "port": 8000, "name": "Team B"},
-    "teamC": {"ip": os.getenv("IP_TEAM_C", "172.21.0.12"), "port": 8000, "name": "Team C"},
-    "teamD": {"ip": os.getenv("IP_TEAM_D", "172.21.0.13"), "port": 8000, "name": "Team D"},
-    "teamE": {"ip": os.getenv("IP_TEAM_E", "172.21.0.14"), "port": 8000, "name": "Team E"},
-    "teamF": {"ip": os.getenv("IP_TEAM_F", "172.21.0.15"), "port": 8000, "name": "Team F"},
+    "teamA": {"ip": os.getenv("IP_TEAM_A", "172.21.0.10"), "port": _team_port("A"), "name": "Team A"},
+    "teamB": {"ip": os.getenv("IP_TEAM_B", "172.21.0.11"), "port": _team_port("B"), "name": "Team B"},
+    "teamC": {"ip": os.getenv("IP_TEAM_C", "172.21.0.12"), "port": _team_port("C"), "name": "Team C"},
+    "teamD": {"ip": os.getenv("IP_TEAM_D", "172.21.0.13"), "port": _team_port("D"), "name": "Team D"},
+    "teamE": {"ip": os.getenv("IP_TEAM_E", "172.21.0.14"), "port": _team_port("E"), "name": "Team E"},
+    "teamF": {"ip": os.getenv("IP_TEAM_F", "172.21.0.15"), "port": _team_port("F"), "name": "Team F"},
 }
 TEAM_ORDER = ["teamA", "teamB", "teamC", "teamD", "teamE", "teamF"]
 

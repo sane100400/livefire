@@ -11,6 +11,7 @@
   TEAM_TOKEN       /attack 호출 시 X-Team-Token 헤더에 사용할 인증 토큰
   ROUND            현재 라운드 번호
   TARGETS          허용 공격 대상 JSON {"teamC": {"ip": ..., "port": ..., "name": ...}, ...}
+  TARGET_REPO_URL  타겟 팀 git smart HTTP URL (읽기 공개)
 """
 import json
 import logging
@@ -63,6 +64,7 @@ def run_attack_agents(
                 "-e", f"TEAM_TOKEN={token}",
                 "-e", f"ROUND={round_num}",
                 "-e", f"TARGETS={json.dumps(targets, ensure_ascii=False)}",
+                "-e", f"TARGET_REPO_URL={coordinator_url.rstrip('/')}/git/{target_team}",
                 image,
             ]
 

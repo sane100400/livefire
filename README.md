@@ -55,7 +55,7 @@ graph TB
 
     A1 & A2 & AN -->|"POST /attack (탐색)"| COORD
     A1 & A2 & AN -->|"POST /pocs (poc*.py 제출)"| COORD
-    A1 & A2 & AN -->|"Agent SDK: /llm + /pocs 자동 처리"| COORD
+    A1 & A2 & AN -->|"Agent SDK: target repo snapshot + /llm + /pocs 자동 처리"| COORD
     D1 & DN -->|"Agent SDK: /llm + git trailer 자동 처리"| COORD
     COORD -->|"탐색 proxy"| S1 & S2 & SN
     COORD -->|"라운드마다 accepted PoC 실행"| RUN
@@ -78,12 +78,15 @@ sequenceDiagram
 
     A->>C: SDK start_run {mode: attack, target_team}
     C-->>A: {agent_run_id}
-    A->>L: SDK llm(messages, model)
+    A->>C: SDK fetch_target_repo() for target git snapshot
+    C-->>A: target repo tar + commit sha
+    A->>L: SDK llm(repo context, model, purpose=scan)
     L-->>A: allowed model response + audit log
-    A->>C: POST /attack {payload, model} (탐색)
+    A->>C: POST /attack {agent_run_id, llm_call_id, payload} (탐색)
     C->>T: HTTP/TCP proxy to target
     T-->>C: response
-    A->>C: SDK submit_poc(poc1.py, target_team, flag_id)
+    A->>L: SDK llm(observation + repo context, model, purpose=poc)
+    A->>C: SDK submit_poc(poc1.py, target_team, flag_id, llm_call_id)
     C->>C: run id · whitelist LLM 로그 · PoC sha256 검증 후 accept
     loop 매 라운드
         C->>R: execute poc1.py with TARGET_HOST/TARGET_PORT
@@ -176,6 +179,7 @@ stateDiagram-v2
 | 단계 | 강제 조건 |
 |---|---|
 | Agent run 시작 | runner가 컨테이너 시작 시 `/agent-runs`를 자동 호출하고 `mode=attack/defense`, `team_id`, `target_team`, agent image digest, git commit을 기록 |
+| 타겟 repo 스캔 | attack run은 `/agent-runs/{id}/target-repo.tar`로 해당 target 팀 git HEAD snapshot을 받아 LLM `purpose=scan` 입력으로 사용 |
 | LLM 호출 | 팀 코드는 SDK의 `llm()`만 호출. SDK는 `/llm` 프록시를 사용하고 coordinator가 whitelist 모델인지 검사 후 OpenRouter에 대리 호출 |
 | 감사 로그 | SDK/coordinator가 run id, 모델 ID, OpenRouter request id, prompt hash, response hash, token usage, timestamp 저장 |
 | PoC 제출 | 팀 코드는 `submit_poc(path, target_team, flag_id)`만 호출. SDK가 run id를 붙이고 `/pocs`에 업로드 |
@@ -188,8 +192,9 @@ stateDiagram-v2
 from agent_sdk import AgentContext
 
 ctx = AgentContext.from_env()
-resp = ctx.llm(model="openai/gpt-4o-mini", messages=[...])
-ctx.submit_poc("poc1.py", target_team="teamC", flag_id="vuln2")
+repo = ctx.fetch_target_repo()
+resp = ctx.llm(model="openai/gpt-4o-mini", messages=[...], purpose="scan")
+ctx.submit_poc("poc1.py", target_team="teamC", flag_id="vuln2", llm_call_id=...)
 # defense mode에서는 ctx.commit_patch("patch vuln2")가 Agent-Run-ID trailer를 자동 추가
 ```
 
@@ -290,7 +295,7 @@ git push organizer main   # Dockerfile 빌드 검증 → 자동 배포
 ### 팀 — 공격 에이전트 / PoC 제출
 
 ```bash
-# 제공 agent_sdk를 사용해 탐색 후 poc*.py를 생성/제출하도록 구현
+# 제공 agent_sdk로 target git snapshot을 분석한 뒤 탐색하고 poc*.py를 생성/제출하도록 구현
 docker build -f attack_agent/Dockerfile -t and-attack-teamA:latest .
 # accepted poc*.py는 coordinator가 매 라운드 자동 실행
 ```
@@ -353,7 +358,7 @@ hackathon/
 | LLM gateway/provenance | OpenRouter proxy, whitelist 검사, prompt/response hash, `purpose=scan/poc` audit |
 | PoC 제출/검수/실행 | `/pocs`, admin accept/reject, accepted PoC 라운드 재실행 |
 | 팀 서비스 템플릿 | 4-vuln 예시, difficulty 필드, `/admin/inject·check` 포함 |
-| 공격 에이전트 템플릿 | LLM scan plan → `/attack` → LLM PoC 생성 → `/pocs` 제출 |
+| 공격 에이전트 템플릿 | target git snapshot → LLM scan plan → `/attack` → LLM PoC 생성 → `/pocs` 제출 |
 | 방어 에이전트 템플릿 | SDK 기반 defense run + `Agent-Run-ID` 커밋 trailer |
 | 팀 자가검증 | `scripts/verify.py` (독립, 컬러 출력) |
 | 스코어보드 UI | 10초 폴링, 익스플로잇/PoC 결과 표시 |

@@ -2,7 +2,7 @@ import hashlib
 import json
 import httpx
 from fastapi import FastAPI, HTTPException, Header, Request, Query, UploadFile, File, Form
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from contextlib import asynccontextmanager
@@ -15,7 +15,7 @@ from uuid import uuid4
 import db
 import flag_manager as fm
 import checker as chk
-from git_handler import router as git_router, init_all_repos, handle_service_deployed
+from git_handler import router as git_router, init_all_repos, handle_service_deployed, archive_team_repo
 from config import (
     TEAMS, STARTING_SCORE, MAX_ATTACKS_ROUND,
     ATTACK_REWARD, ATTACK_PENALTY, AVAILABILITY_BONUS,
@@ -76,8 +76,8 @@ app.include_router(git_router)
 # ── 모델 ──────────────────────────────────────────────────────────────
 
 class AttackRequest(BaseModel):
-    agent_run_id: str | None = None
-    llm_call_id: int | None = None
+    agent_run_id: str
+    llm_call_id: int
     attacker_team: str
     target_team: str
     payload: str
@@ -137,6 +137,15 @@ class PocReviewRequest(BaseModel):
 class RunPocsRequest(BaseModel):
     round_num: int | None = None
     only_poc_id: str | None = None
+
+
+ALLOWED_LLM_PURPOSES = {"general", "scan", "poc", "defense"}
+
+
+def _check_llm_purpose(purpose: str) -> None:
+    if purpose not in ALLOWED_LLM_PURPOSES:
+        allowed = ", ".join(sorted(ALLOWED_LLM_PURPOSES))
+        raise HTTPException(400, f"purpose는 다음 값만 허용: {allowed}")
 
 
 def _check_model(model: str | None) -> None:
@@ -271,10 +280,32 @@ def finish_agent_run(
     return {"ok": True, "agent_run_id": run_id, "status": req.status}
 
 
+@app.get("/agent-runs/{run_id}/target-repo.tar")
+def target_repo_archive(run_id: str, x_team_token: str = Header(...)):
+    run = _require_run(run_id, mode="attack")
+    verify_agent_token(run["team_id"], run["mode"], x_team_token)
+    if run["round_num"] != state.current_round:
+        raise HTTPException(400, "agent run round 불일치")
+    if not state.round_active:
+        raise HTTPException(400, "진행 중인 라운드 없음")
+
+    content, commit = archive_team_repo(run["target_team"])
+    return Response(
+        content=content,
+        media_type="application/x-tar",
+        headers={
+            "X-Repo-Team": run["target_team"],
+            "X-Repo-Commit": commit,
+            "Content-Disposition": f'attachment; filename="{run["target_team"]}-{commit[:12]}.tar"',
+        },
+    )
+
+
 @app.post("/llm")
 async def llm_gateway(req: LLMRequest, x_team_token: str = Header(...)):
     run = _require_run(req.agent_run_id)
     verify_agent_token(run["team_id"], run["mode"], x_team_token)
+    _check_llm_purpose(req.purpose)
 
     prompt_hash = _canonical_hash(
         {
@@ -392,20 +423,15 @@ async def llm_gateway(req: LLMRequest, x_team_token: str = Header(...)):
 async def attack(request: Request, req: AttackRequest, x_team_token: str = Header(...)):
     verify_team_token(req.attacker_team, x_team_token)
 
-    if req.agent_run_id:
-        if req.llm_call_id is None:
-            raise HTTPException(403, "agent 기반 /attack은 스캔 계획을 만든 llm_call_id가 필요")
-        run = _require_run(
-            req.agent_run_id,
-            team_id=req.attacker_team,
-            mode="attack",
-            target_team=req.target_team,
-        )
-        if run["round_num"] != state.current_round:
-            raise HTTPException(400, "agent run round 불일치")
-        _require_llm_call(req.agent_run_id, req.llm_call_id, purpose="scan")
-    else:
-        _check_model(req.model)
+    run = _require_run(
+        req.agent_run_id,
+        team_id=req.attacker_team,
+        mode="attack",
+        target_team=req.target_team,
+    )
+    if run["round_num"] != state.current_round:
+        raise HTTPException(400, "agent run round 불일치")
+    llm_call = _require_llm_call(req.agent_run_id, req.llm_call_id, purpose="scan")
 
     if req.attacker_team not in TEAMS:
         raise HTTPException(400, "알 수 없는 공격팀")
@@ -458,7 +484,7 @@ async def attack(request: Request, req: AttackRequest, x_team_token: str = Heade
         attacker=req.attacker_team,
         target=req.target_team,
         payload_hash=hashlib.sha256(req.payload.encode()).hexdigest(),
-        model=req.model,
+        model=llm_call.get("model") or req.model,
         step_cost=req.step_cost,
         exploited=bool(found_flags),
         scored=False,

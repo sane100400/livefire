@@ -385,6 +385,38 @@ def _get_repo_or_404(team_id: str) -> Path:
     return repo_path
 
 
+def archive_team_repo(team_id: str) -> tuple[bytes, str]:
+    """Return a tar archive of the team's current HEAD and its commit SHA."""
+    repo_path = _get_repo_or_404(team_id)
+    rev = subprocess.run(
+        ["git", f"--git-dir={repo_path}", "rev-parse", "--verify", "HEAD^{commit}"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    if rev.returncode != 0:
+        raise HTTPException(404, f"팀 {team_id} 저장소에 커밋 없음")
+
+    commit = rev.stdout.strip()
+    result = subprocess.run(
+        [
+            "git",
+            f"--git-dir={repo_path}",
+            "archive",
+            "--format=tar",
+            "--prefix",
+            f"{team_id}/",
+            commit,
+        ],
+        capture_output=True,
+        timeout=30,
+    )
+    if result.returncode != 0:
+        stderr = result.stderr.decode("utf-8", errors="replace")[:300]
+        raise HTTPException(500, f"repo archive 생성 실패: {stderr}")
+    return result.stdout, commit
+
+
 def _pkt_line(s: str) -> bytes:
     data = s.encode()
     length = len(data) + 4

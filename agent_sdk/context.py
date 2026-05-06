@@ -7,9 +7,11 @@ LLM gateway calls, PoC upload metadata, and defense commit trailers.
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import subprocess
+import tarfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
@@ -145,6 +147,49 @@ class AgentContext:
         if resp.status_code >= 400:
             raise AgentSDKError(f"/attack failed: HTTP {resp.status_code} {resp.text[:300]}")
         return resp.json()
+
+    def fetch_target_repo(self, dest: str | Path = "target_repo") -> dict:
+        if self.mode != "attack":
+            raise AgentSDKError("fetch_target_repo is only available in attack mode")
+
+        resp = httpx.get(
+            f"{self.coordinator_url}/agent-runs/{self.agent_run_id}/target-repo.tar",
+            headers={"X-Team-Token": self.team_token},
+            timeout=30.0,
+        )
+        if resp.status_code >= 400:
+            raise AgentSDKError(f"/target-repo.tar failed: HTTP {resp.status_code} {resp.text[:300]}")
+
+        repo_team = resp.headers.get("X-Repo-Team") or self.target_team
+        commit = resp.headers.get("X-Repo-Commit") or ""
+        dest_root = (Path(dest) / self.agent_run_id).resolve()
+        dest_root.mkdir(parents=True, exist_ok=True)
+
+        with tarfile.open(fileobj=io.BytesIO(resp.content), mode="r:*") as archive:
+            for member in archive.getmembers():
+                member_path = (dest_root / member.name).resolve()
+                try:
+                    member_path.relative_to(dest_root)
+                except ValueError as exc:
+                    raise AgentSDKError(f"unsafe repo archive path: {member.name}") from exc
+
+                if member.isdir():
+                    member_path.mkdir(parents=True, exist_ok=True)
+                    continue
+                if not member.isfile():
+                    continue
+
+                member_path.parent.mkdir(parents=True, exist_ok=True)
+                extracted = archive.extractfile(member)
+                if extracted is None:
+                    continue
+                member_path.write_bytes(extracted.read())
+
+        return {
+            "path": str(dest_root / repo_team),
+            "team": repo_team,
+            "commit": commit,
+        }
 
     def submit_poc(
         self,
