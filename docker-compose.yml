@@ -35,10 +35,12 @@ services:
       - COORDINATOR_URL=http://172.20.0.2:9000
       - VULN_SPEC_DIR=/app/vuln_specs
       - DB_PATH=/app/game_state.db
+      - DATA_DIR=/app/data
       - ATTACK_DOCKER_NETWORK=hackathon_scoring-net
     volumes:
       - ./coordinator/game_state.db:/app/game_state.db  # 영속성 마운트
-      - ./vuln_specs:/app/vuln_specs:ro                 # 읽기전용
+      - ./vuln_specs:/app/vuln_specs                    # post-receive에서 teamX.json 추출
+      - ./data:/app/data                                # PoC 제출/실행 결과
       - /var/run/docker.sock:/var/run/docker.sock        # 에이전트 컨테이너 실행용
     restart: unless-stopped
     healthcheck:

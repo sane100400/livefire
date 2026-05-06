@@ -39,6 +39,7 @@ from fastapi import APIRouter, HTTPException, Header, Request, Response
 
 import db
 import flag_manager as fm
+from rotation import get_defender
 
 logger = logging.getLogger(__name__)
 
@@ -61,19 +62,19 @@ router = APIRouter(prefix="/git")
 
 # ── 인증 헬퍼 ─────────────────────────────────────────────────────────
 
-def _require_push_auth(team_id: str, authorization: str | None) -> None:
+def _require_push_auth(repo_team_id: str, authorization: str | None) -> str:
     """
     git push(git-receive-pack) 전용 인증.
 
     HTTP Basic Auth: username=team_id, password=TEAM_TOKEN
     실패 시 401 + WWW-Authenticate 헤더 반환 (git 클라이언트가 credential 재요청)
     """
-    from config import TEAM_TOKENS
+    from config import TEAM_TOKENS, DEFENSE_TOKENS
 
     _UNAUTHORIZED = HTTPException(
         status_code=401,
         detail="Git push 인증 실패",
-        headers={"WWW-Authenticate": f'Basic realm="HSPACE CTF git — {team_id}"'},
+        headers={"WWW-Authenticate": f'Basic realm="HSPACE CTF git — {repo_team_id}"'},
     )
 
     if not authorization or not authorization.startswith("Basic "):
@@ -85,10 +86,18 @@ def _require_push_auth(team_id: str, authorization: str | None) -> None:
         raise _UNAUTHORIZED
 
     username, _, password = decoded.partition(":")
-    expected_token = TEAM_TOKENS.get(team_id, "")
+    defender = get_defender(repo_team_id)
+    allowed_users = {repo_team_id, defender}
+    if username == repo_team_id:
+        expected_token = TEAM_TOKENS.get(username, "")
+    elif username == defender:
+        expected_token = DEFENSE_TOKENS.get(username, "")
+    else:
+        expected_token = ""
 
-    if not expected_token or username != team_id or password != expected_token:
+    if not expected_token or username not in allowed_users or password != expected_token:
         raise _UNAUTHORIZED
+    return username
 
 
 # ── bare repo 초기화 ───────────────────────────────────────────────────
@@ -122,15 +131,44 @@ def _install_hooks(repo_path: Path, team_id: str) -> None:
 # pre-receive hook for team {team_id}
 TEAM_ID="{team_id}"
 COORDINATOR_URL="${{COORDINATOR_URL:-http://localhost:9000}}"
+ADMIN_SECRET="${{ADMIN_SECRET:-changeme}}"
+PUSH_USER="${{PUSH_USER:-$TEAM_ID}}"
+VULN_SPEC_DIR="${{VULN_SPEC_DIR:-/app/vuln_specs}}"
 
 while read oldrev newrev refname; do
+    STATUS=$(curl -sf "$COORDINATOR_URL/status" 2>/dev/null)
+    ACTIVE=$(echo "$STATUS" | python3 -c "import sys,json; print(json.load(sys.stdin).get('round_active',False))" 2>/dev/null)
+
     # vuln_spec.json 변경 감지
     if git diff --name-only "$oldrev" "$newrev" 2>/dev/null | grep -q "vuln_spec.json"; then
         # 라운드 진행 중이면 거부
-        STATUS=$(curl -sf "$COORDINATOR_URL/status" 2>/dev/null)
-        ACTIVE=$(echo "$STATUS" | python3 -c "import sys,json; print(json.load(sys.stdin).get('round_active',False))" 2>/dev/null)
         if [ "$ACTIVE" = "True" ]; then
             echo "ERROR: 대회 진행 중에는 vuln_spec.json 변경 불가"
+            exit 1
+        fi
+    fi
+
+    if [ "$ACTIVE" = "True" ]; then
+        if [ "$PUSH_USER" = "$TEAM_ID" ]; then
+            echo "ERROR: 라운드 중에는 사이트 소유자가 직접 패치 push 불가. 방어 에이전트 run을 사용하세요."
+            exit 1
+        fi
+        AGENT_RUN_ID=$(git log -1 --format=%B "$newrev" | awk '/^Agent-Run-ID:/ {{print $2}}' | tail -n 1)
+        if [ -z "$AGENT_RUN_ID" ]; then
+            echo "ERROR: defense patch commit에는 Agent-Run-ID trailer가 필요합니다."
+            exit 1
+        fi
+        curl -sf -X POST "$COORDINATOR_URL/admin/validate-defense-push" \\
+            -H "X-Admin-Secret: $ADMIN_SECRET" \\
+            -H "Content-Type: application/json" \\
+            -d '{{"repo_team_id":"{team_id}","pusher_team_id":"'"$PUSH_USER"'","commit":"'"$newrev"'","agent_run_id":"'"$AGENT_RUN_ID"'"}}' >/dev/null
+        if [ $? -ne 0 ]; then
+            echo "ERROR: Agent-Run-ID provenance 검증 실패"
+            exit 1
+        fi
+    else
+        if [ "$PUSH_USER" != "$TEAM_ID" ]; then
+            echo "ERROR: 대회 시작 전에는 사이트 소유자만 push 가능"
             exit 1
         fi
     fi
@@ -166,6 +204,7 @@ exit 0
 TEAM_ID="{team_id}"
 COORDINATOR_URL="${{COORDINATOR_URL:-http://localhost:9000}}"
 ADMIN_SECRET="${{ADMIN_SECRET:-changeme}}"
+PUSH_USER="${{PUSH_USER:-$TEAM_ID}}"
 
 while read oldrev newrev refname; do
     echo "[$TEAM_ID] 서비스 빌드/배포 시작..."
@@ -202,11 +241,30 @@ while read oldrev newrev refname; do
         exit 1
     fi
 
+    if git cat-file -e "$newrev:vuln_spec.json" 2>/dev/null; then
+        mkdir -p "$VULN_SPEC_DIR"
+        TMP_SPEC=$(mktemp)
+        git show "$newrev:vuln_spec.json" > "$TMP_SPEC"
+        python3 -m json.tool "$TMP_SPEC" >/dev/null
+        if [ $? -ne 0 ]; then
+            echo "ERROR: vuln_spec.json이 유효한 JSON이 아닙니다"
+            rm -f "$TMP_SPEC"
+            exit 1
+        fi
+        mv "$TMP_SPEC" "$VULN_SPEC_DIR/{team_id}.json"
+        echo "[$TEAM_ID] vuln_spec 추출 완료: $VULN_SPEC_DIR/{team_id}.json"
+    fi
+
+    AGENT_RUN_ID=""
+    if [ "$PUSH_USER" != "$TEAM_ID" ]; then
+        AGENT_RUN_ID=$(git log -1 --format=%B "$newrev" | awk '/^Agent-Run-ID:/ {{print $2}}' | tail -n 1)
+    fi
+
     # coordinator에 deploy 이벤트 알림 (flag 재주입 트리거)
     curl -sf -X POST "$COORDINATOR_URL/admin/service-deployed" \\
         -H "X-Admin-Secret: $ADMIN_SECRET" \\
         -H "Content-Type: application/json" \\
-        -d '{{"team_id": "{team_id}", "commit": "'"$newrev"'"}}'
+        -d '{{"team_id": "{team_id}", "commit": "'"$newrev"'", "pusher_team_id": "'"$PUSH_USER"'", "agent_run_id": "'"$AGENT_RUN_ID"'"}}'
 
     echo "[$TEAM_ID] 배포 완료 (commit: ${{newrev:0:8}})"
 done
@@ -251,8 +309,9 @@ async def git_service(team_id: str, service: str, request: Request):
         raise HTTPException(400, "unknown service")
 
     # push는 팀 토큰 인증 필수
+    push_user = None
     if service == "git-receive-pack":
-        _require_push_auth(team_id, request.headers.get("Authorization"))
+        push_user = _require_push_auth(team_id, request.headers.get("Authorization"))
 
     repo_path = _get_repo_or_404(team_id)
     body = await request.body()
@@ -261,6 +320,9 @@ async def git_service(team_id: str, service: str, request: Request):
     env["COORDINATOR_URL"] = os.getenv("COORDINATOR_URL", "http://localhost:9000")
     env["ADMIN_SECRET"] = os.getenv("ADMIN_SECRET", "changeme")
     env["CHECKER_TOKEN"] = CHECKER_TOKEN
+    env["VULN_SPEC_DIR"] = os.getenv("VULN_SPEC_DIR", str(Path(__file__).parent.parent / "vuln_specs"))
+    if push_user:
+        env["PUSH_USER"] = push_user
 
     cmd = [service, "--stateless-rpc", str(repo_path)]
     result = subprocess.run(
@@ -281,13 +343,26 @@ async def git_service(team_id: str, service: str, request: Request):
 
 # ── admin: service-deployed 알림 처리 (app.py에서 호출) ───────────────
 
-async def handle_service_deployed(team_id: str, commit: str, current_round: int, vuln_specs: dict) -> bool:
+async def handle_service_deployed(
+    team_id: str,
+    commit: str,
+    current_round: int,
+    vuln_specs: dict,
+    pusher_team_id: str | None = None,
+    agent_run_id: str | None = None,
+) -> bool:
     """
     post-receive hook에서 coordinator로 알림이 오면:
     1. DB에 배포 기록
     2. 현재 라운드 flag 재주입
     """
-    logger.info("서비스 배포 알림: team=%s commit=%s", team_id, commit[:8])
+    logger.info("서비스 배포 알림: team=%s pusher=%s commit=%s", team_id, pusher_team_id or team_id, commit[:8])
+    db.record_service_deployment(
+        team_id=team_id,
+        commit_sha=commit,
+        agent_run_id=agent_run_id or None,
+        mode="defense_patch" if agent_run_id else "service",
+    )
 
     if current_round > 0:
         # 현재 라운드 flag 다시 주입

@@ -1,10 +1,10 @@
 """
 채점 로직.
 
-live-fire 방식:
-  1. 공격 에이전트가 /attack으로 페이로드 전송
-  2. 응답에서 HSPACE{ 패턴 추출 (flag_manager.extract_flags_from_text)
-  3. 추출한 flag를 /submit-flag로 제출
+PoC 방식:
+  1. 공격 에이전트가 /attack으로 탐색
+  2. 재현 가능한 poc*.py를 /pocs로 제출
+  3. accepted PoC를 라운드마다 runner가 실행
   4. coordinator가 active_flags와 대조 → 점수 부여
 
 SLA 상태 반영:

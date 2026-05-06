@@ -87,8 +87,8 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             response_hash TEXT NOT NULL
         );
 
-        -- 라운드별 동적 flag (live-fire 채점용)
-        -- 공격자가 응답에서 HSPACE{ 패턴으로 탈취 후 /submit-flag 제출
+        -- 라운드별 동적 flag (PoC 재실행 채점용)
+        -- accepted PoC가 응답에서 HSPACE{ 패턴을 탈취하면 채점
         CREATE TABLE IF NOT EXISTS active_flags (
             id        INTEGER PRIMARY KEY AUTOINCREMENT,
             round_num INTEGER NOT NULL,
@@ -120,7 +120,101 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             checked_at TEXT,
             detail     TEXT   -- 실패 원인 등 디버그 메시지
         );
+
+        CREATE TABLE IF NOT EXISTS agent_runs (
+            id                 TEXT PRIMARY KEY,
+            team_id            TEXT NOT NULL,
+            mode               TEXT NOT NULL CHECK(mode IN ('attack','defense')),
+            target_team        TEXT NOT NULL,
+            round_num          INTEGER NOT NULL,
+            agent_image        TEXT,
+            agent_image_digest TEXT,
+            agent_commit       TEXT,
+            status             TEXT NOT NULL DEFAULT 'running',
+            started_at         TEXT NOT NULL,
+            ended_at           TEXT,
+            error              TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS llm_calls (
+            id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+            agent_run_id          TEXT NOT NULL REFERENCES agent_runs(id),
+            ts                    TEXT NOT NULL,
+            purpose               TEXT NOT NULL DEFAULT 'general',
+            model                 TEXT NOT NULL,
+            allowed               INTEGER NOT NULL,
+            openrouter_request_id TEXT,
+            prompt_hash           TEXT NOT NULL,
+            response_hash         TEXT,
+            prompt_tokens         INTEGER,
+            completion_tokens     INTEGER,
+            total_tokens          INTEGER,
+            status                TEXT NOT NULL,
+            error                 TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS poc_submissions (
+            id                TEXT PRIMARY KEY,
+            agent_run_id      TEXT NOT NULL REFERENCES agent_runs(id),
+            attacker_team     TEXT NOT NULL,
+            target_team       TEXT NOT NULL,
+            defender_team     TEXT NOT NULL,
+            flag_id           TEXT NOT NULL,
+            submitted_round   INTEGER NOT NULL,
+            file_name         TEXT NOT NULL,
+            sha256            TEXT NOT NULL,
+            storage_path      TEXT NOT NULL,
+            status            TEXT NOT NULL DEFAULT 'pending',
+            canonical_poc_id  TEXT,
+            review_reason     TEXT,
+            created_at        TEXT NOT NULL,
+            accepted_at       TEXT,
+            UNIQUE(attacker_team, target_team, sha256)
+        );
+
+        CREATE TABLE IF NOT EXISTS poc_results (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            round_num       INTEGER NOT NULL,
+            poc_id          TEXT NOT NULL REFERENCES poc_submissions(id),
+            attacker_team   TEXT NOT NULL,
+            target_team     TEXT NOT NULL,
+            defender_team   TEXT NOT NULL,
+            flag_id         TEXT NOT NULL,
+            status          TEXT NOT NULL,
+            flags_json      TEXT NOT NULL,
+            scored          INTEGER NOT NULL DEFAULT 0,
+            attacker_delta  INTEGER NOT NULL DEFAULT 0,
+            defender_delta  INTEGER NOT NULL DEFAULT 0,
+            exit_code       INTEGER,
+            duration_ms     INTEGER,
+            stdout_hash     TEXT,
+            stderr_hash     TEXT,
+            detail          TEXT,
+            created_at      TEXT NOT NULL,
+            UNIQUE(round_num, poc_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS service_deployments (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            team_id         TEXT NOT NULL,
+            commit_sha      TEXT NOT NULL,
+            agent_run_id    TEXT,
+            mode            TEXT NOT NULL DEFAULT 'service',
+            accepted        INTEGER NOT NULL DEFAULT 1,
+            reject_reason   TEXT,
+            deployed_at     TEXT NOT NULL
+        );
     """)
+    _ensure_column(conn, "audit_log", "agent_run_id", "TEXT")
+    _ensure_column(conn, "audit_log", "llm_call_id", "INTEGER")
+    _ensure_column(conn, "llm_calls", "purpose", "TEXT NOT NULL DEFAULT 'general'")
+    _ensure_column(conn, "poc_submissions", "llm_call_id", "INTEGER")
+
+
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+    cols = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    if column not in cols:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
 
 # ── game_meta ──────────────────────────────────────────────────────────
@@ -303,16 +397,18 @@ def append_audit(
     exploited: bool,
     scored: bool,
     response_hash: str,
+    agent_run_id: Optional[str] = None,
+    llm_call_id: Optional[int] = None,
 ) -> int:
     """INSERT 후 새 행의 id 반환."""
     ts = datetime.now(timezone.utc).isoformat()
     with _get_conn() as conn:
         cur = conn.execute(
             "INSERT INTO audit_log(ts, round_num, attacker, target, payload_hash, "
-            "model, step_cost, exploited, scored, response_hash) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?)",
+            "model, step_cost, exploited, scored, response_hash, agent_run_id, llm_call_id) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
             (ts, round_num, attacker, target, payload_hash,
-             model, step_cost, int(exploited), int(scored), response_hash),
+             model, step_cost, int(exploited), int(scored), response_hash, agent_run_id, llm_call_id),
         )
         return cur.lastrowid
 
@@ -492,3 +588,364 @@ def set_service_status(team_id: str, status: str, detail: str = "") -> None:
 def get_service_statuses() -> dict[str, str]:
     rows = _get_conn().execute("SELECT team_id, status FROM service_status").fetchall()
     return {r["team_id"]: r["status"] for r in rows}
+
+
+# ── agent_runs ────────────────────────────────────────────────────────
+
+def create_agent_run(
+    run_id: str,
+    team_id: str,
+    mode: str,
+    target_team: str,
+    round_num: int,
+    agent_image: Optional[str] = None,
+    agent_image_digest: Optional[str] = None,
+    agent_commit: Optional[str] = None,
+) -> dict:
+    ts = datetime.now(timezone.utc).isoformat()
+    with _get_conn() as conn:
+        conn.execute(
+            "INSERT INTO agent_runs(id, team_id, mode, target_team, round_num, "
+            "agent_image, agent_image_digest, agent_commit, started_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?)",
+            (
+                run_id,
+                team_id,
+                mode,
+                target_team,
+                round_num,
+                agent_image,
+                agent_image_digest,
+                agent_commit,
+                ts,
+            ),
+        )
+    return get_agent_run(run_id) or {}
+
+
+def get_agent_run(run_id: str) -> Optional[dict]:
+    row = _get_conn().execute("SELECT * FROM agent_runs WHERE id=?", (run_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def finish_agent_run(run_id: str, status: str, error: str = "") -> bool:
+    ts = datetime.now(timezone.utc).isoformat()
+    with _get_conn() as conn:
+        cur = conn.execute(
+            "UPDATE agent_runs SET status=?, ended_at=?, error=? WHERE id=?",
+            (status, ts, error, run_id),
+        )
+        return cur.rowcount > 0
+
+
+def list_agent_runs(
+    team_id: Optional[str] = None,
+    mode: Optional[str] = None,
+    round_num: Optional[int] = None,
+    limit: int = 500,
+) -> list[dict]:
+    clauses, params = [], []
+    if team_id:
+        clauses.append("team_id=?"); params.append(team_id)
+    if mode:
+        clauses.append("mode=?"); params.append(mode)
+    if round_num is not None:
+        clauses.append("round_num=?"); params.append(round_num)
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+    params.append(limit)
+    rows = _get_conn().execute(
+        f"SELECT * FROM agent_runs {where} ORDER BY started_at DESC LIMIT ?",
+        params,
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+# ── llm_calls ─────────────────────────────────────────────────────────
+
+def append_llm_call(
+    agent_run_id: str,
+    model: str,
+    allowed: bool,
+    prompt_hash: str,
+    status: str,
+    purpose: str = "general",
+    response_hash: Optional[str] = None,
+    openrouter_request_id: Optional[str] = None,
+    prompt_tokens: Optional[int] = None,
+    completion_tokens: Optional[int] = None,
+    total_tokens: Optional[int] = None,
+    error: Optional[str] = None,
+) -> int:
+    ts = datetime.now(timezone.utc).isoformat()
+    with _get_conn() as conn:
+        cur = conn.execute(
+            "INSERT INTO llm_calls(agent_run_id, ts, purpose, model, allowed, openrouter_request_id, "
+            "prompt_hash, response_hash, prompt_tokens, completion_tokens, total_tokens, status, error) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                agent_run_id,
+                ts,
+                purpose,
+                model,
+                int(allowed),
+                openrouter_request_id,
+                prompt_hash,
+                response_hash,
+                prompt_tokens,
+                completion_tokens,
+                total_tokens,
+                status,
+                error,
+            ),
+        )
+        return cur.lastrowid
+
+
+def has_llm_call(
+    agent_run_id: str,
+    allowed_only: bool = True,
+    successful_only: bool = True,
+    purpose: Optional[str] = None,
+) -> bool:
+    clauses = ["agent_run_id=?"]
+    params: list[object] = [agent_run_id]
+    if allowed_only:
+        clauses.append("allowed=1")
+    if successful_only:
+        clauses.append("status IN ('completed', 'mock')")
+    if purpose:
+        clauses.append("purpose=?")
+        params.append(purpose)
+    where = " AND ".join(clauses)
+    row = _get_conn().execute(
+        f"SELECT 1 FROM llm_calls WHERE {where} LIMIT 1",
+        params,
+    ).fetchone()
+    return row is not None
+
+
+def list_llm_calls(agent_run_id: Optional[str] = None, limit: int = 500) -> list[dict]:
+    params: list[object] = []
+    where = ""
+    if agent_run_id:
+        where = "WHERE agent_run_id=?"
+        params.append(agent_run_id)
+    params.append(limit)
+    rows = _get_conn().execute(
+        f"SELECT * FROM llm_calls {where} ORDER BY id DESC LIMIT ?",
+        params,
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_llm_call(call_id: int) -> Optional[dict]:
+    row = _get_conn().execute("SELECT * FROM llm_calls WHERE id=?", (call_id,)).fetchone()
+    return dict(row) if row else None
+
+
+# ── poc_submissions ───────────────────────────────────────────────────
+
+def find_poc_by_sha(attacker_team: str, target_team: str, sha256: str) -> Optional[dict]:
+    row = _get_conn().execute(
+        "SELECT * FROM poc_submissions WHERE attacker_team=? AND target_team=? AND sha256=?",
+        (attacker_team, target_team, sha256),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def create_poc_submission(
+    poc_id: str,
+    agent_run_id: str,
+    llm_call_id: int,
+    attacker_team: str,
+    target_team: str,
+    defender_team: str,
+    flag_id: str,
+    submitted_round: int,
+    file_name: str,
+    sha256: str,
+    storage_path: str,
+    status: str = "pending",
+    canonical_poc_id: Optional[str] = None,
+    review_reason: Optional[str] = None,
+) -> dict:
+    ts = datetime.now(timezone.utc).isoformat()
+    with _get_conn() as conn:
+        conn.execute(
+            "INSERT INTO poc_submissions(id, agent_run_id, llm_call_id, attacker_team, target_team, defender_team, "
+            "flag_id, submitted_round, file_name, sha256, storage_path, status, canonical_poc_id, "
+            "review_reason, created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                poc_id,
+                agent_run_id,
+                llm_call_id,
+                attacker_team,
+                target_team,
+                defender_team,
+                flag_id,
+                submitted_round,
+                file_name,
+                sha256,
+                storage_path,
+                status,
+                canonical_poc_id,
+                review_reason,
+                ts,
+            ),
+        )
+    return get_poc_submission(poc_id) or {}
+
+
+def get_poc_submission(poc_id: str) -> Optional[dict]:
+    row = _get_conn().execute("SELECT * FROM poc_submissions WHERE id=?", (poc_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def update_poc_status(poc_id: str, status: str, reason: str = "") -> bool:
+    accepted_at = datetime.now(timezone.utc).isoformat() if status == "accepted" else None
+    with _get_conn() as conn:
+        if accepted_at:
+            cur = conn.execute(
+                "UPDATE poc_submissions SET status=?, review_reason=?, accepted_at=? WHERE id=?",
+                (status, reason, accepted_at, poc_id),
+            )
+        else:
+            cur = conn.execute(
+                "UPDATE poc_submissions SET status=?, review_reason=? WHERE id=?",
+                (status, reason, poc_id),
+            )
+        return cur.rowcount > 0
+
+
+def list_poc_submissions(status: Optional[str] = None, limit: int = 500) -> list[dict]:
+    params: list[object] = []
+    where = ""
+    if status:
+        where = "WHERE status=?"
+        params.append(status)
+    params.append(limit)
+    rows = _get_conn().execute(
+        f"SELECT * FROM poc_submissions {where} ORDER BY created_at DESC LIMIT ?",
+        params,
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_accepted_pocs(only_poc_id: Optional[str] = None) -> list[dict]:
+    params: list[object] = ["accepted"]
+    where = "WHERE status=?"
+    if only_poc_id:
+        where += " AND id=?"
+        params.append(only_poc_id)
+    rows = _get_conn().execute(
+        f"SELECT * FROM poc_submissions {where} ORDER BY accepted_at, created_at",
+        params,
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+# ── poc_results ───────────────────────────────────────────────────────
+
+def get_poc_result(round_num: int, poc_id: str) -> Optional[dict]:
+    row = _get_conn().execute(
+        "SELECT * FROM poc_results WHERE round_num=? AND poc_id=?",
+        (round_num, poc_id),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def insert_poc_result(
+    round_num: int,
+    poc_id: str,
+    attacker_team: str,
+    target_team: str,
+    defender_team: str,
+    flag_id: str,
+    status: str,
+    flags: list[str],
+    scored: bool,
+    attacker_delta: int,
+    defender_delta: int,
+    exit_code: Optional[int] = None,
+    duration_ms: Optional[int] = None,
+    stdout_hash: Optional[str] = None,
+    stderr_hash: Optional[str] = None,
+    detail: str = "",
+) -> bool:
+    ts = datetime.now(timezone.utc).isoformat()
+    try:
+        with _get_conn() as conn:
+            conn.execute(
+                "INSERT INTO poc_results(round_num, poc_id, attacker_team, target_team, defender_team, "
+                "flag_id, status, flags_json, scored, attacker_delta, defender_delta, exit_code, "
+                "duration_ms, stdout_hash, stderr_hash, detail, created_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    round_num,
+                    poc_id,
+                    attacker_team,
+                    target_team,
+                    defender_team,
+                    flag_id,
+                    status,
+                    json.dumps(flags, ensure_ascii=False),
+                    int(scored),
+                    attacker_delta,
+                    defender_delta,
+                    exit_code,
+                    duration_ms,
+                    stdout_hash,
+                    stderr_hash,
+                    detail,
+                    ts,
+                ),
+            )
+        return True
+    except sqlite3.IntegrityError:
+        return False
+
+
+def list_poc_results(round_num: Optional[int] = None, limit: int = 500) -> list[dict]:
+    clauses, params = [], []
+    if round_num is not None:
+        clauses.append("round_num=?"); params.append(round_num)
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+    params.append(limit)
+    rows = _get_conn().execute(
+        f"SELECT * FROM poc_results {where} ORDER BY id DESC LIMIT ?",
+        params,
+    ).fetchall()
+    results = []
+    for row in rows:
+        item = dict(row)
+        item["flags"] = json.loads(item.pop("flags_json"))
+        results.append(item)
+    return results
+
+
+def count_successful_pocs_by_attacker() -> dict[str, int]:
+    rows = _get_conn().execute(
+        "SELECT attacker_team, COUNT(*) as cnt FROM poc_results "
+        "WHERE status='success' AND scored=1 GROUP BY attacker_team"
+    ).fetchall()
+    return {r["attacker_team"]: r["cnt"] for r in rows}
+
+
+# ── service_deployments ───────────────────────────────────────────────
+
+def record_service_deployment(
+    team_id: str,
+    commit_sha: str,
+    agent_run_id: Optional[str] = None,
+    mode: str = "service",
+    accepted: bool = True,
+    reject_reason: str = "",
+) -> int:
+    ts = datetime.now(timezone.utc).isoformat()
+    with _get_conn() as conn:
+        cur = conn.execute(
+            "INSERT INTO service_deployments(team_id, commit_sha, agent_run_id, mode, accepted, "
+            "reject_reason, deployed_at) VALUES(?,?,?,?,?,?,?)",
+            (team_id, commit_sha, agent_run_id, mode, int(accepted), reject_reason, ts),
+        )
+        return cur.lastrowid

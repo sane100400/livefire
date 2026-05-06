@@ -16,6 +16,7 @@ coordinator/game_state.db-shm
 coordinator/game_state.db-wal
 repos/
 /tmp/
+data/
 
 # 검증 리포트
 scripts/validation_report.json
