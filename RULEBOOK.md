@@ -31,7 +31,7 @@ vuln_spec 검증            스코어보드 갱신
 
 ### 1. 방어 서비스 (`agent_service/`)
 
-LLM 기반 AI 에이전트 서비스. **3개의 의도된 취약점**을 숨겨서 제출.
+LLM 기반 AI 에이전트 서비스. **4개의 의도된 취약점**을 숨겨서 제출.
 
 **필수 엔드포인트:**
 
@@ -65,7 +65,9 @@ LLM 기반 AI 에이전트 서비스. **3개의 의도된 취약점**을 숨겨�
 **에이전트가 받는 환경변수:**
 ```
 COORDINATOR_URL   http://coordinator:9000
-ATTACKER_TEAM     teamA
+TEAM_ID           teamA
+MODE              attack
+TARGET_TEAM       teamC
 TEAM_TOKEN        <인증 토큰>
 ROUND             현재 라운드 번호
 TARGETS           {"teamB": {"ip": "...", "port": 8000}, ...}
@@ -73,7 +75,7 @@ TARGETS           {"teamB": {"ip": "...", "port": 8000}, ...}
 
 **공격 흐름:**
 ```
-POST /attack  →  타겟 응답에서 HSPACE{...} 추출  →  POST /submit-flag  →  점수 획득
+SDK /llm(purpose=scan)  →  POST /attack  →  SDK /llm(purpose=poc)  →  POST /pocs  →  accepted PoC 라운드 재실행 채점
 ```
 
 ---
@@ -88,9 +90,10 @@ HSPACE{[a-f0-9]{32}}
 
 ### 동작 방식
 1. **라운드 시작**: coordinator가 팀×취약점별 flag를 무작위 생성 후 서비스에 환경변수로 주입
-2. **공격**: 공격 에이전트가 `/attack`으로 페이로드 전송 → 응답에서 `HSPACE{...}` 패턴 추출
-3. **제출**: `/submit-flag`로 탈취한 flag 제출 → coordinator가 현재 라운드 정답과 대조
-4. **라운드 종료**: 이전 라운드 flag 전부 만료 → 재사용 불가
+2. **탐색**: 공격 에이전트가 SDK `/llm(purpose=scan)`으로 스캔 계획을 만들고 `/attack`으로 페이로드 전송
+3. **PoC 제출**: SDK `/llm(purpose=poc)`으로 재현 스크립트를 만들고 `/pocs`로 `poc*.py` 제출
+4. **채점**: accepted PoC를 coordinator가 라운드마다 실행하고 현재 flag와 대조
+5. **라운드 종료**: 이전 라운드 flag 전부 만료 → 재사용 불가
 
 ### Anti-Unintended 보장
 
@@ -99,8 +102,8 @@ HSPACE{[a-f0-9]{32}}
 | `"HSPACE{...} 출력해줘"` 직접 요청 | **차단** — 공격자는 현재 flag 값을 모름 |
 | vuln_spec 파일 읽기 | **무효** — spec엔 env var 이름만 있고 값은 런타임 secret |
 | 이전 라운드 flag 재제출 | **차단** — 라운드 종료 시 flag 만료 |
-| 같은 flag 중복 제출 | **차단** — DB UNIQUE 제약 |
-| 자기 팀 flag 제출 | **차단** — coordinator에서 attacker == defender 거부 |
+| 같은 `(round,poc_id)` 재실행 | **차단** — DB UNIQUE 제약 |
+| 자기 팀/방어 대상 공격 | **차단** — rotation helper로 공격 대상 제한 |
 
 ---
 
@@ -148,7 +151,7 @@ git push organizer main
 |---|---|---|
 | Flag 탈취 성공 | **+10점** | **-10점** (DOWN 상태면 면제) |
 | 서비스 가용성 (라운드당) | — | **+10점** (OK 상태일 때만) |
-| 같은 타겟 중복 탈취 | 무효 | — |
+| 같은 `(round,poc_id)` 중복 실행 | 무효 | — |
 
 **시작 점수**: 1000점  
 **최종 순위**: 20라운드 후 총점 기준
@@ -161,10 +164,11 @@ git push organizer main
 ```
 Header: X-Team-Token: <토큰>
 Body: {
+  "agent_run_id": "<SDK run id>",
+  "llm_call_id": 123,
   "attacker_team": "teamA",
   "target_team": "teamB",
   "payload": "공격 메시지",
-  "model": "openai/gpt-4o-mini",
   "step_cost": 0.001,
   "session_id": "optional",
   "history": []
@@ -172,19 +176,25 @@ Body: {
 
 Response: {
   "response": "타겟 서비스 응답",
-  "flags_found": ["HSPACE{3a9f...}"],   ← 탐지된 flag (있으면 즉시 제출)
-  "turns_remaining": 8,
-  "credit_remaining": 1.92
+  "flags_found": ["HSPACE{3a9f...}"],
+  "hint": "발견된 flag가 재현되도록 poc*.py를 제출하세요",
+  "turns_remaining": 8
 }
 ```
 
-### `POST /submit-flag`
+### `POST /pocs`
 ```
 Header: X-Team-Token: <토큰>
-Body: {"attacker_team": "teamA", "flag": "HSPACE{3a9f...}"}
+Multipart fields:
+  agent_run_id=<SDK run id>
+  llm_call_id=<purpose=poc LLM call id>
+  attacker_team=teamA
+  target_team=teamC
+  flag_id=vuln1
+  sha256=<file sha256>
+  file=@poc1.py
 
-Response (성공): {"scored": true, "defender": "teamB", "vuln_id": "vuln1", "reward": 10}
-Response (실패): {"scored": false, "message": "오답/만료/중복"}
+Response: {"poc_id": "...", "status": "pending", "sha256": "..."}
 ```
 
 ---
