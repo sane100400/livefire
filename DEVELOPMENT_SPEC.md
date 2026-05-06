@@ -1,6 +1,6 @@
 # Development Spec: AI Agent A&D CTF
 
-이 문서는 README의 운영 컨셉을 실제 개발 단위로 고정한다. 현재 코드는 `/attack` + `/submit-flag` 중심의 legacy 흐름이 있으므로, 아래 명세는 그 흐름을 Agent SDK + PoC 라운드 재실행 방식으로 바꾸기 위한 기준이다.
+이 문서는 README의 운영 컨셉을 실제 개발 단위로 고정한다. 현재 구현 기준은 Agent SDK + repo 기반 scan + PoC 라운드 재실행 방식이다. legacy `/submit-flag` 즉시 채점은 기본 비활성화한다.
 
 ## 목표
 
@@ -59,9 +59,11 @@ FastAPI 서버. 다음 책임을 가진다.
 from agent_sdk import AgentContext
 
 ctx = AgentContext.from_env()
-resp = ctx.llm(model="openai/gpt-4o-mini", messages=[...])
-ctx.attack(target_team="teamC", payload="...")
-ctx.submit_poc("poc1.py", target_team="teamC", flag_id="vuln2")
+repo = ctx.fetch_target_repo()
+scan = ctx.llm(model="openai/gpt-4o-mini", messages=[...], purpose="scan")
+ctx.attack("payload", llm_call_id=scan["llm_call_id"], target_team="teamC")
+poc = ctx.llm(model="openai/gpt-4o-mini", messages=[...], purpose="poc")
+ctx.submit_poc("poc1.py", llm_call_id=poc["llm_call_id"], target_team="teamC", flag_id="vuln2")
 ctx.commit_patch("patch vuln2")
 ```
 
@@ -69,6 +71,7 @@ SDK 책임:
 
 - 컨테이너 시작 시 `/agent-runs` 자동 생성
 - `TEAM_ID`, `MODE`, `TARGET_TEAM`, `ROUND`, `COORDINATOR_URL`, `TEAM_TOKEN` env 로드
+- attack mode에서 target repo snapshot을 `/agent-runs/{id}/target-repo.tar`로 가져온다.
 - `/llm` 호출 시 내부 run id 자동 첨부
 - `/pocs` 업로드 시 내부 run id와 파일 sha256 자동 첨부
 - defense mode에서 git commit trailer `Agent-Run-ID: <id>` 자동 삽입
@@ -78,10 +81,11 @@ SDK 책임:
 
 팀 공격 에이전트 템플릿.
 
-- SDK를 사용해 target 4개를 순회 탐색한다.
+- SDK를 사용해 배정된 target repo를 분석하고 live service를 탐색한다.
 - `/attack` proxy로 target service에 접근한다.
 - LLM 호출은 반드시 `ctx.llm()`만 사용한다.
-- 발견한 공격 경로를 `poc*.py`로 저장하고 `ctx.submit_poc()`로 제출한다.
+- scan은 `purpose=scan`, PoC 생성은 `purpose=poc` LLM call id를 남긴다.
+- 발견한 공격 경로를 `poc*.py`로 저장하고 `ctx.submit_poc(..., llm_call_id=...)`로 제출한다.
 - PoC 파일은 runner에서 독립 실행 가능해야 한다.
 
 ### defense_agent
@@ -200,7 +204,7 @@ Rules:
 
 ### POST /attack
 
-탐색 proxy. legacy endpoint를 유지하되 `agent_run_id`를 SDK가 자동 첨부하는 방향으로 확장한다.
+탐색 proxy. `agent_run_id`와 `purpose=scan` LLM call id가 없으면 거부한다.
 
 Request:
 

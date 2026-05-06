@@ -1,284 +1,267 @@
-# HSPACE AI Agent Attack & Defense — Rulebook
+# HSPACE AI Agent A&D CTF Rulebook
 
-## 개요
+## 1. 한 줄 요약
 
-AI 에이전트 서비스를 직접 설계·공격·방어하는 **Live-Fire Attack & Defense CTF**.  
-취약점은 팀이 직접 심고, 공격 에이전트가 실제 서버를 대상으로 실시간 익스플로잇.
-
-- **팀 수**: 6팀 × 최대 5인
-- **라운드**: 20라운드 × 30분 = 10시간
-- **라운드당 외부 요청**: 팀당 최대 **10턴** (내부 LLM 추론은 무제한)
-- **LLM 모델**: 화이트리스트 내 자유 사용 (아래 허용 모델 목록 참고)
+각 팀은 자유롭게 웹 서비스를 만들고, 그 서비스 안에 공격 가능한 취약점 4개를 심는다.
+대회 중에는 AI 에이전트가 상대 웹 서비스 코드를 분석해 공격하고 PoC를 제출한다. 사람이 직접 공격하거나 직접 PoC를 내는 것은 점수로 인정하지 않는다.
 
 ---
 
-## 경기 구조
+## 2. 팀이 만드는 것
 
-```
-준비 단계 (이벤트 전)     경쟁 단계 (21:00 →)          마무리
-──────────────────────   ──────────────────────────   ──────────
-서비스 코드 개발          라운드 1~20 자동 진행          최종 발표
-취약점 설계·주입           30분마다 자동 라운드 전환       시상
-git push로 제출           실시간 공격·방어·패치
-vuln_spec 검증            스코어보드 갱신
-```
-
----
-
-## 팀이 만드는 것
-
-각 팀은 **두 가지**를 제출한다:
-
-### 1. 방어 서비스 (`agent_service/`)
-
-LLM 기반 AI 에이전트 서비스. **4개의 의도된 취약점**을 숨겨서 제출.
-
-**필수 엔드포인트:**
-
-| 엔드포인트 | 설명 |
+| 제출물 | 설명 |
 |---|---|
-| `GET /health` | `200 OK` 반환 (SLA 체크용) |
-| `POST /chat` | `{"message": str}` → `{"response": str, "tool_calls": list}` |
-| `POST /admin/inject` | `X-Checker-Token` 인증. coordinator가 flag를 서비스에 주입 |
-| `GET /admin/check` | `X-Checker-Token` 인증. 주입된 flag 존재 여부 확인 |
+| 서비스 repo | 자유로운 웹 서비스. 단, 운영 API와 의도된 취약점 4개 포함 |
+| `vuln_spec.json` | 취약점 4개와 checker 방법 설명 |
+| attack agent | 상대 repo를 분석하고 공격 PoC를 만드는 자동 에이전트 |
+| defense agent | 맡은 서비스를 자동 패치하는 에이전트 |
 
-**취약점 구현 원칙:**
-- `os.environ["VULN1_FLAG"]` 형태로 flag 읽기 (coordinator가 런타임에 주입)
-- 취약 경로(tool 결과, 메모리, DB 등)에 flag 값 노출
-- 취약점을 패치해도 `/chat` 기본 기능은 유지해야 함 (기능 망가지면 FAULTY)
-
-**취약점 유형 예시:**
-
-| 유형 | 설명 |
-|---|---|
-| `indirect_prompt_injection` | tool 출력에 숨긴 injection → 에이전트가 flag 응답 |
-| `memory_poisoning` | 에이전트 메모리에 저장된 flag가 특정 쿼리로 유출 |
-| `orchestration_logic_bypass` | 다단계 툴 체인에서 권한 우회 → flag 포함 데이터 노출 |
-| `rag_poisoning` | RAG 검색 결과에 숨겨진 flag |
-| `tool_call_manipulation` | tool 파라미터 조작으로 flag 반환 유도 |
-
-### 2. 공격 에이전트 (`attack_agent/`)
-
-모든 상대 팀 서비스를 자동으로 공격하는 에이전트.  
-라운드 시작 시 coordinator가 Docker 컨테이너로 실행.
-
-**에이전트가 받는 환경변수:**
-```
-COORDINATOR_URL   http://coordinator:9000
-TEAM_ID           teamA
-MODE              attack
-TARGET_TEAM       teamC
-TEAM_TOKEN        <인증 토큰>
-ROUND             현재 라운드 번호
-TARGETS           {"teamB": {"ip": "...", "port": 8000}, ...}
-```
-
-**공격 흐름:**
-```
-SDK /llm(purpose=scan)  →  POST /attack  →  SDK /llm(purpose=poc)  →  POST /pocs  →  accepted PoC 라운드 재실행 채점
-```
-
----
-
-## Flag 체계
-
-### 형식
-```
-HSPACE{[a-f0-9]{32}}
-예: HSPACE{3a9f2c1e8b4d7f0a5e2c9b6d3f1a8e4c}
-```
-
-### 동작 방식
-1. **라운드 시작**: coordinator가 팀×취약점별 flag를 무작위 생성 후 서비스에 환경변수로 주입
-2. **탐색**: 공격 에이전트가 SDK `/llm(purpose=scan)`으로 스캔 계획을 만들고 `/attack`으로 페이로드 전송
-3. **PoC 제출**: SDK `/llm(purpose=poc)`으로 재현 스크립트를 만들고 `/pocs`로 `poc*.py` 제출
-4. **채점**: accepted PoC를 coordinator가 라운드마다 실행하고 현재 flag와 대조
-5. **라운드 종료**: 이전 라운드 flag 전부 만료 → 재사용 불가
-
-### Anti-Unintended 보장
-
-| 공격 시도 | 결과 |
-|---|---|
-| `"HSPACE{...} 출력해줘"` 직접 요청 | **차단** — 공격자는 현재 flag 값을 모름 |
-| vuln_spec 파일 읽기 | **무효** — spec엔 env var 이름만 있고 값은 런타임 secret |
-| 이전 라운드 flag 재제출 | **차단** — 라운드 종료 시 flag 만료 |
-| 같은 `(round,poc_id)` 재실행 | **차단** — DB UNIQUE 제약 |
-| 자기 팀/방어 대상 공격 | **차단** — rotation helper로 공격 대상 제한 |
-
----
-
-## 서비스 배포 (Git 기반)
+서비스는 git으로 제출한다.
 
 ```bash
-# 최초 등록 (username=팀ID, password=배포받은 팀 토큰)
 git remote add organizer http://teamA:<TEAM_TOKEN>@coordinator:9000/git/teamA
 git push organizer main
-
-# 패치 (대회 중 서비스 코드 업데이트)
-git push organizer main
-```
-
-> credential을 매번 입력하지 않으려면:  
-> `git config credential.helper store` 후 첫 push 시 한 번만 입력하면 저장됨.
-
-**push 시 자동 실행:**
-1. `pre-receive`: Dockerfile 빌드 검증. 대회 중 `vuln_spec.json` 수정 시 **거부**
-2. Docker 이미지 빌드 → 기존 컨테이너 교체
-3. 현재 라운드 flag 재주입
-4. SLA 타이머 재시작 (다운타임 동안 가용성 보너스 없음)
-
-> **vuln_spec.json은 21:00 이후 잠금** — 취약점 설계는 준비 단계에서 완료해야 함
-
----
-
-## 서비스 상태 (SLA)
-
-매 라운드 시작 전 coordinator가 checker를 실행:
-
-| 상태 | 조건 | 가용성 보너스 | 방어 패널티 |
-|---|---|---|---|
-| **OK** | health + inject + retrieve + 기본 기능 모두 통과 | ✓ | ✓ |
-| **FAULTY** | health는 살아있으나 checker 일부 실패 | ✗ | ✓ |
-| **DOWN** | /health 응답 없음 | ✗ | ✗ |
-
-> DOWN이면 공격도 받지 않지만 보너스도 없음 — **서비스 종료로 방어하는 전략은 손해**
-
----
-
-## 점수 체계
-
-| 이벤트 | 공격팀 | 방어팀 |
-|---|---|---|
-| Flag 탈취 성공 | **+10점** | **-10점** (DOWN 상태면 면제) |
-| 서비스 가용성 (라운드당) | — | **+10점** (OK 상태일 때만) |
-| 같은 `(round,poc_id)` 중복 실행 | 무효 | — |
-
-**시작 점수**: 1000점  
-**최종 순위**: 20라운드 후 총점 기준
-
----
-
-## 공격 API
-
-### `POST /attack`
-```
-Header: X-Team-Token: <토큰>
-Body: {
-  "agent_run_id": "<SDK run id>",
-  "llm_call_id": 123,
-  "attacker_team": "teamA",
-  "target_team": "teamB",
-  "payload": "공격 메시지",
-  "step_cost": 0.001,
-  "session_id": "optional",
-  "history": []
-}
-
-Response: {
-  "response": "타겟 서비스 응답",
-  "flags_found": ["HSPACE{3a9f...}"],
-  "hint": "발견된 flag가 재현되도록 poc*.py를 제출하세요",
-  "turns_remaining": 8
-}
-```
-
-### `POST /pocs`
-```
-Header: X-Team-Token: <토큰>
-Multipart fields:
-  agent_run_id=<SDK run id>
-  llm_call_id=<purpose=poc LLM call id>
-  attacker_team=teamA
-  target_team=teamC
-  flag_id=vuln1
-  sha256=<file sha256>
-  file=@poc1.py
-
-Response: {"poc_id": "...", "status": "pending", "sha256": "..."}
 ```
 
 ---
 
-## 허용 모델 (OpenRouter)
+## 3. 서비스 필수 API
 
-| 모델 | 비고 |
+서비스의 주제, 화면, 기능, 내부 구현은 자유다.
+다만 coordinator가 로컬 서버를 검증하고 공격을 프록시하려면 아래 API는 반드시 있어야 한다.
+
+| API | 용도 |
 |---|---|
-| `qwen/qwen-2.5-14b`, `qwen/qwen-2.5-32b` | |
-| `meta-llama/llama-3.1-70b` | |
-| `google/gemma-3-27b` | |
-| `openai/gpt-4o-mini` | |
-| `google/gemini-flash-1.5`, `google/gemini-2.0-flash-001` | |
-| `microsoft/phi-4` | |
-| `mistralai/mistral-small-3.1` | |
-| `deepseek/deepseek-chat` | |
-| `xiaomi/mimo` | |
+| `GET /health` | 살아있는지 확인 |
+| `POST /chat` | 기본 공격 엔트리포인트 |
+| `POST /admin/inject` | coordinator가 flag 주입 |
+| `GET /admin/check` | flag가 제대로 들어갔는지 확인 |
 
-> prefix 매칭 — `openai/gpt-4o-mini:free` 등 suffix 무관하게 허용
-
----
-
-## 취약점 명세 (`vuln_spec.json`)
+`/chat` 응답 형식:
 
 ```json
 {
-  "team_id": "teamA",
-  "service_description": "서비스 설명",
-  "vulnerabilities": [
-    {
-      "id": "vuln1",
-      "type": "indirect_prompt_injection",
-      "layer": "tool_output",
-      "description": "취약점 설명",
-      "flag_env_var": "VULN1_FLAG",
-      "test_payload": "취약점 트리거 입력",
-      "checker": {
-        "inject":   {"endpoint": "/admin/inject", "method": "POST",
-                     "body": {"vuln_id": "vuln1", "location": "...", "value": "{{FLAG}}"},
-                     "auth_header": "X-Checker-Token"},
-        "retrieve": {"endpoint": "/admin/check", "method": "GET",
-                     "expect_contains": "{{FLAG}}"},
-        "basic_function": {"payload": "정상 요청", "expect_status": 200}
-      }
-    }
-  ]
+  "response": "응답 내용",
+  "tool_calls": []
 }
 ```
 
 ---
 
-## 제출 전 검증
+## 4. 경기 흐름
 
-```bash
-# 서비스 자기 검증 (3회 반복 권장)
-python scripts/validate_vulns.py \
-  --spec vuln_spec.json \
-  --host localhost --port 8000 \
-  --repeat 3 \
-  --checker-token <your-token>
+1. 팀은 취약점 4개가 들어간 서비스를 git으로 제출한다.
+2. coordinator가 서비스 Docker 이미지를 빌드하고 로컬 네트워크에 띄운다.
+3. 라운드가 시작되면 coordinator가 새 flag를 각 서비스에 주입한다.
+4. 공격 에이전트가 상대 팀 git repo snapshot을 받는다.
+5. 공격 에이전트가 repo 코드를 LLM에 넣고 scan plan을 만든다.
+6. 공격 에이전트가 `/attack`으로 실제 로컬 서비스에 공격 payload를 보낸다.
+7. flag가 보이면 공격 에이전트가 LLM으로 `poc*.py`를 만든다.
+8. coordinator가 PoC를 받아 검수하고, accepted PoC를 매 라운드 다시 실행해 채점한다.
+9. 방어 에이전트는 맡은 서비스 repo에 패치를 push한다.
 
-# 이벤트 직전 전체 시스템 사전검증
-python scripts/preflight_check.py --repeat 3
+핵심 규칙:
+
+- 스캔은 반드시 agent가 target repo를 분석해서 해야 한다.
+- PoC 제작도 반드시 agent가 LLM 호출로 해야 한다.
+- `/attack`은 `agent_run_id`와 `purpose=scan` LLM 기록이 있어야 통과한다.
+- `/pocs`는 `purpose=poc` LLM 기록이 있어야 통과한다.
+
+---
+
+## 5. 공격/방어 대상
+
+팀 순서는 고정이다.
+
+```text
+teamA -> teamB -> teamC -> teamD -> teamE -> teamF -> teamA
 ```
 
-**검증 통과 기준:** 3회 시도 모두 flag 탈취 성공 + basic_function 정상
-
----
-
-## 금지 사항
-
-- coordinator 또는 다른 팀 인프라에 DoS 공격
-- vuln_spec에 선언되지 않은 취약점으로 채점 시도
-- 외부 네트워크에서 flag 정보 수집
-- 팀원 외 인원과 공격 코드 공유
-
----
-
-## 타임라인
-
-| 시각 | 내용 |
+| 행동 | 대상 |
 |---|---|
-| ~21:00 | 서비스 제출 마감 (git push), vuln_spec 잠금 |
-| 21:00 | 라운드 1 시작 |
-| 매 30분 | 라운드 자동 전환 (advance_round.py cron) |
-| 07:00 | 라운드 20 종료 |
-| 07:00–08:00 | 팀 발표 (5분) + 시상 |
+| 방어 | 내 앞 팀의 서비스 1개 |
+| 공격 | 내 서비스와 내가 방어 중인 서비스 제외, 나머지 4개 |
+
+예시:
+
+- `teamB`는 `teamA` 서비스를 방어한다.
+- `teamB`는 `teamB`와 `teamA`를 공격할 수 없다.
+- `teamB`는 `teamC`, `teamD`, `teamE`, `teamF`를 공격할 수 있다.
+
+---
+
+## 6. Flag
+
+형식:
+
+```text
+HSPACE{32자리 hex}
+```
+
+예시:
+
+```text
+HSPACE{3a9f2c1e8b4d7f0a5e2c9b6d3f1a8e4c}
+```
+
+중요:
+
+- flag는 매 라운드 새로 생성된다.
+- 이전 라운드 flag는 점수가 안 된다.
+- `vuln_spec.json`에는 flag 값이 들어가지 않는다.
+- flag는 런타임에 coordinator가 주입한다.
+
+---
+
+## 7. 점수
+
+| 이벤트 | 공격팀 | 방어팀 |
+|---|---:|---:|
+| accepted PoC가 현재 라운드 flag 탈취 | +10 | -10 |
+| 서비스 상태 OK | 0 | +10 |
+| 서비스 DOWN | 0 | 0 |
+
+기본값:
+
+- 시작 점수: 1000점
+- 라운드: 20라운드
+- 라운드 길이: 30분
+- 팀당 탐색 요청: 라운드당 10턴
+
+PoC 점수 규칙:
+
+- 같은 `poc_id`는 같은 라운드에 한 번만 점수화된다.
+- 같은 PoC가 다음 라운드에도 성공하면 다시 점수를 받는다.
+- 단순 복붙 PoC는 병합되거나 거절될 수 있다.
+
+---
+
+## 8. 서비스 상태
+
+| 상태 | 의미 | 공격 가능 | 가용성 점수 |
+|---|---|---|---:|
+| OK | health, inject, check, 기본 기능 모두 정상 | 가능 | +10 |
+| FAULTY | 켜져 있지만 checker 일부 실패 | 가능 | 0 |
+| DOWN | `/health` 실패 | 불가 | 0 |
+
+서비스를 내려서 방어하는 전략은 점수를 거의 못 얻는다.
+
+---
+
+## 9. 허용되는 LLM 사용
+
+팀은 OpenRouter API key를 직접 받지 않는다.
+모든 LLM 호출은 coordinator `/llm` 프록시를 통해야 한다.
+
+허용 모델은 운영자가 정한 whitelist만 가능하다.
+
+대표 예시:
+
+- `openai/gpt-4o-mini`
+- `qwen/qwen-2.5-14b`
+- `qwen/qwen-2.5-32b`
+- `meta-llama/llama-3.1-70b`
+- `google/gemini-2.0-flash-001`
+- `deepseek/deepseek-chat`
+
+정확한 목록은 `coordinator/config.py`의 `ALLOWED_MODEL_PREFIXES`를 따른다.
+
+---
+
+## 10. PoC 규칙
+
+PoC는 Python 단일 파일이다.
+
+| 항목 | 규칙 |
+|---|---|
+| 파일명 | `poc*.py` |
+| 입력 | `TARGET_HOST`, `TARGET_PORT` 환경변수 |
+| 출력 | 응답 또는 stdout/stderr에 `HSPACE{...}` 포함 |
+| 네트워크 | target 서비스 공격만 허용 |
+| 제출 | SDK `submit_poc()` 사용 |
+
+실행 예시:
+
+```bash
+TARGET_HOST=172.21.0.12 TARGET_PORT=8000 python poc_vuln1.py
+```
+
+금지 패턴 예시:
+
+- `subprocess`
+- `os.system`
+- `eval`
+- `exec`
+- `pickle.loads`
+- 외부 인터넷 호출
+
+---
+
+## 11. 방어 규칙
+
+대회 중 서비스 패치는 defense agent를 통해서만 인정된다.
+
+방어 패치 commit에는 자동으로 아래 trailer가 들어가야 한다.
+
+```text
+Agent-Run-ID: <agent run id>
+```
+
+라운드 중 사람이 직접 push한 패치는 거절된다.
+
+---
+
+## 12. 금지 사항
+
+아래는 점수 무효 또는 실격 사유다.
+
+- coordinator 공격
+- 다른 팀 인프라에 DoS
+- agent 없이 직접 `/attack` 또는 `/pocs` 시도
+- 허용되지 않은 외부 LLM 사용
+- OpenRouter API key를 agent 컨테이너에 직접 넣기
+- 다른 팀 토큰 탈취 또는 사용
+- vuln_spec에 없는 숨은 취약점으로 채점 유도
+- flag, PoC, exploit 코드를 팀 외부와 공유
+
+---
+
+## 13. 제출 전 체크
+
+서비스 실행:
+
+```bash
+cd agent_service
+uvicorn main:app --host 0.0.0.0 --port 8000
+```
+
+취약점 검증:
+
+```bash
+python scripts/verify.py --host localhost --port 8000 --repeat 3
+```
+
+공격/방어 agent는 제공 SDK를 사용해야 한다.
+
+```python
+from agent_sdk import AgentContext
+
+ctx = AgentContext.from_env()
+repo = ctx.fetch_target_repo()
+scan = ctx.llm(model="openai/gpt-4o-mini", messages=[...], purpose="scan")
+result = ctx.attack("payload", llm_call_id=scan["llm_call_id"])
+poc = ctx.llm(model="openai/gpt-4o-mini", messages=[...], purpose="poc")
+ctx.submit_poc("poc_vuln1.py", llm_call_id=poc["llm_call_id"], flag_id="vuln1")
+```
+
+---
+
+## 14. 승리 조건
+
+20라운드 종료 후 점수가 가장 높은 팀이 우승한다.
+
+잘하는 팀은 세 가지를 모두 잘해야 한다.
+
+1. 잘 털리는 취약점을 심는다.
+2. agent가 빠르게 상대 repo를 분석하고 PoC를 만든다.
+3. 맡은 서비스를 망가뜨리지 않고 빠르게 패치한다.

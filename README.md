@@ -112,13 +112,13 @@ stateDiagram-v2
     OK      --> DOWN  : health 실패 (즉시)
     FAULTY  --> OK    : 전체 통과 (즉시)
     FAULTY  --> DOWN  : health 실패 (즉시)
-    DOWN    --> OK    : 연속 2회 통과 (hysteresis)
+    DOWN    --> OK    : 전체 통과
     DOWN    --> FAULTY: health 복구 but 나머지 실패
 ```
 
 | 상태 | 가용성 보너스 | 공격 허용 | 방어 패널티 |
 |---|:---:|:---:|:---:|
-| OK | ✅ 비례 지급 | ✅ | ✅ |
+| OK | ✅ +10/라운드 | ✅ | ✅ |
 | FAULTY | ❌ | ✅ | ✅ |
 | DOWN | ❌ | ❌ | ❌ |
 
@@ -137,9 +137,9 @@ stateDiagram-v2
 | 공격 대상 수 | 4개 (자기·디펜스 대상 제외) |
 | 방어 대상 수 | 1개 (시계 방향 옆 팀) |
 | 점수 (PoC) | 성공한 accepted PoC당 라운드마다 공격 +10 / 방어 -10 |
-| 점수 (가용성) | OK 비율 × 10점/라운드 |
+| 점수 (가용성) | 라운드 종료 시 health OK + 저장된 service status OK이면 +10 |
 | 시작 점수 | 1000점 |
-| SLA 체크 주기 | 10분 (라운드당 3회) |
+| SLA 체크 시점 | 라운드 시작, 서비스 재배포, 라운드 종료 |
 | 채점 방식 | **PoC 라운드 재실행 + flag 검출** |
 | AI 경유 강제 | 공격 PoC와 방어 패치는 모두 제공 Agent SDK/runner가 기록한 팀 에이전트 산출물만 accept |
 | LLM 호출 경로 | 팀 에이전트 → coordinator `/llm` → OpenRouter (직접 OpenRouter 키 지급 금지) |
@@ -182,7 +182,7 @@ stateDiagram-v2
 | 타겟 repo 스캔 | attack run은 `/agent-runs/{id}/target-repo.tar`로 해당 target 팀 git HEAD snapshot을 받아 LLM `purpose=scan` 입력으로 사용 |
 | LLM 호출 | 팀 코드는 SDK의 `llm()`만 호출. SDK는 `/llm` 프록시를 사용하고 coordinator가 whitelist 모델인지 검사 후 OpenRouter에 대리 호출 |
 | 감사 로그 | SDK/coordinator가 run id, 모델 ID, OpenRouter request id, prompt hash, response hash, token usage, timestamp 저장 |
-| PoC 제출 | 팀 코드는 `submit_poc(path, target_team, flag_id)`만 호출. SDK가 run id를 붙이고 `/pocs`에 업로드 |
+| PoC 제출 | 팀 코드는 `submit_poc(path, llm_call_id, target_team, flag_id)`만 호출. SDK가 run id를 붙이고 `/pocs`에 업로드 |
 | 방어 패치 | 팀 코드는 `commit_patch(message)` 또는 제공 git wrapper 사용. SDK가 커밋 trailer `Agent-Run-ID: <id>`를 자동 삽입 |
 | 산출물 연결 | PoC 파일 sha256 또는 patch diff hash를 agent run에 저장해 나중에 대시보드에서 추적 |
 
@@ -217,8 +217,8 @@ POST /admin/inject    X-Checker-Token  {vuln_id, location, value}
 GET  /admin/check     X-Checker-Token  → 응답에 flag 포함
 ```
 
-취약점 **4개**를 서비스 주요 공격면(`/chat` 포함)에 심고 `vuln_spec.json`으로 명세 제출. 난이도는 하/중/상으로 분포(예: 하 1·중 2·상 1).
-취약점 유형: `indirect_prompt_injection` · `memory_poisoning` · `orchestration_bypass` · `rag_poisoning` · `tool_call_manipulation`
+서비스 주제와 내부 구현은 자유다. 취약점 **4개**를 서비스 주요 공격면(`/chat` 포함)에 심고 `vuln_spec.json`으로 명세 제출한다. 난이도는 하/중/상으로 분포(예: 하 1·중 2·상 1).
+취약점 유형은 웹 취약점, 비즈니스 로직 취약점, 에이전트/RAG/tool 취약점 모두 가능하다.
 
 > 옆 팀이 패치하므로 **취약하게 만들수록 옆 팀이 깎인다**. 의도적으로 빡세게 심을 인센티브가 있음.
 

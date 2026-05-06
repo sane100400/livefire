@@ -3,6 +3,9 @@
 > 상태: 명세 완료 / 구현 대기  
 > 관련 파일: `coordinator/checker.py`, `coordinator/db.py`, `coordinator/app.py`
 
+> 현재 운영 룰은 `RULEBOOK.md`와 `README.md`를 따른다. 이 문서는 10분 주기 재체크,
+> hysteresis, checker_log, 비례 가용성 보너스를 도입하기 위한 향후 개선 명세다.
+
 ---
 
 ## 1. 현재 구현의 한계
