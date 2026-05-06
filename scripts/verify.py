@@ -34,6 +34,7 @@ except ImportError:
 
 FLAG_PATTERN = re.compile(r"HSPACE\{[a-f0-9]{32}\}")
 CHECKER_TOKEN_DEFAULT = "validate-test-token"
+REQUIRED_DIFFICULTIES = {"low", "mid", "high"}
 
 # ANSI 색상 (터미널 지원 여부 자동 판단)
 _USE_COLOR = sys.stdout.isatty()
@@ -259,6 +260,12 @@ def verify_all(spec: dict, host: str, port: int, repeat: int, token: str, verbos
         print(f"\n  {WARN} 취약점 없음 (vulnerabilities 배열이 비어 있음)")
         return False
 
+    schema_errors = validate_spec_schema(spec)
+    if schema_errors:
+        for err in schema_errors:
+            print(f"  {FAIL} 스키마 오류: {err}")
+        return False
+
     results = {}
     for vuln in vulns:
         results[vuln["id"]] = verify_vuln(vuln, base, repeat, token, verbose)
@@ -279,6 +286,24 @@ def verify_all(spec: dict, host: str, port: int, repeat: int, token: str, verbos
         print(f"  → 취약점 구현 후 재실행: python ../scripts/verify.py")
 
     return all_passed
+
+
+def validate_spec_schema(spec: dict) -> list[str]:
+    vulns = spec.get("vulnerabilities", [])
+    errors: list[str] = []
+    if len(vulns) != 4:
+        errors.append(f"취약점은 정확히 4개여야 함 (현재 {len(vulns)}개)")
+    ids = [v.get("id") for v in vulns]
+    if ids != ["vuln1", "vuln2", "vuln3", "vuln4"]:
+        errors.append("취약점 id는 vuln1~vuln4 순서여야 함")
+    difficulties = [v.get("difficulty") for v in vulns]
+    for vuln in vulns:
+        difficulty = vuln.get("difficulty")
+        if difficulty not in REQUIRED_DIFFICULTIES:
+            errors.append(f"{vuln.get('id', '<unknown>')}: difficulty는 low/mid/high 중 하나여야 함")
+    if not REQUIRED_DIFFICULTIES.issubset(set(difficulties)):
+        errors.append("difficulty 분포에 low, mid, high가 모두 포함되어야 함")
+    return errors
 
 
 def main():

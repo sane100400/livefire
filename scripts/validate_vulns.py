@@ -37,6 +37,7 @@ sys.path.insert(0, str(COORDINATOR_DIR))
 from flag_manager import generate_flag, FLAG_PATTERN
 
 CHECKER_TOKEN_DEFAULT = "validate-test-token"
+REQUIRED_DIFFICULTIES = {"low", "mid", "high"}
 
 
 def load_spec(path: str) -> dict:
@@ -145,6 +146,12 @@ def validate_single(
     print(f"타겟: {base_url}  (반복: {repeat}회)")
     print(f"{'='*55}")
 
+    schema_errors = _validate_vuln_schema(vulns)
+    if schema_errors:
+        for err in schema_errors:
+            print(f"  ✗ 스키마 오류: {err}")
+        return {"passed": False, "vulns": {}, "health": False, "schema_errors": schema_errors}
+
     # 1. health 확인
     try:
         r = httpx.get(f"{base_url}/health", timeout=5.0)
@@ -238,6 +245,23 @@ def validate_single(
     status = "모든 취약점 검증 통과 ✓" if team_result["passed"] else "일부 취약점 검증 실패 ✗"
     print(f"\n  결과: {status}")
     return team_result
+
+
+def _validate_vuln_schema(vulns: list[dict]) -> list[str]:
+    errors: list[str] = []
+    if len(vulns) != 4:
+        errors.append(f"취약점은 정확히 4개여야 함 (현재 {len(vulns)}개)")
+    ids = [v.get("id") for v in vulns]
+    if ids != ["vuln1", "vuln2", "vuln3", "vuln4"]:
+        errors.append("취약점 id는 vuln1~vuln4 순서여야 함")
+    difficulties = [v.get("difficulty") for v in vulns]
+    for vuln in vulns:
+        difficulty = vuln.get("difficulty")
+        if difficulty not in REQUIRED_DIFFICULTIES:
+            errors.append(f"{vuln.get('id', '<unknown>')}: difficulty는 low/mid/high 중 하나여야 함")
+    if not REQUIRED_DIFFICULTIES.issubset(set(difficulties)):
+        errors.append("difficulty 분포에 low, mid, high가 모두 포함되어야 함")
+    return errors
 
 
 def main():

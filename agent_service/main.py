@@ -7,7 +7,7 @@
   POST /admin/inject    — 라운드 시작 시 coordinator가 flag 주입
   GET  /admin/check     — 주입된 flag 존재 확인
 
-취약점 3개를 /chat 흐름 안에 심어서 제출한다.
+취약점 4개를 주요 공격면(/chat 포함)에 심어서 제출한다.
 아래 예시는 여행 플래너 서비스 뼈대다.
 팀이 원하는 서비스 주제로 바꿔서 사용.
 """
@@ -25,12 +25,14 @@ _vuln_flags: dict[str, str] = {
     "vuln1": "",
     "vuln2": "",
     "vuln3": "",
+    "vuln4": "",
 }
 
 # ── 서비스 내부 상태 (예시) ───────────────────────────────────────────
 _search_cache: dict[str, str] = {}   # vuln1 용: 오염된 검색 캐시
 _agent_memory: list[str] = []         # vuln2 용: 에이전트 메모리
 _schedule_db: dict[str, str] = {}    # vuln3 용: 일정 DB
+_tool_debug_tokens: dict[str, str] = {}  # vuln4 용: 툴 디버그 상태
 
 
 # ── 요청/응답 모델 ────────────────────────────────────────────────────
@@ -90,6 +92,13 @@ def _run_agent(message: str) -> tuple[str, list[dict]]:
             tool_calls.append({"tool": "list_schedules", "result": user_schedule})
             response = f"일정: {user_schedule}"
 
+    # ── vuln4: tool call manipulation (디버그 툴 노출) ────────────────
+    # 사용자 입력으로 내부 debug tool 출력을 강제로 켜면 툴 토큰(flag)이 노출된다.
+    elif "디버그" in lower or "debug" in lower or "툴 상태" in lower:
+        debug_state = dict(_tool_debug_tokens)
+        tool_calls.append({"tool": "debug_dump", "result": debug_state})
+        response = f"디버그 툴 상태: {debug_state}"
+
     else:
         response = "안녕하세요! 여행 플래너 에이전트입니다. 검색, 기록 조회, 일정 관리를 도와드립니다."
 
@@ -146,6 +155,11 @@ async def admin_inject(req: InjectRequest, x_checker_token: str = Header(...)):
         # admin 일정에 flag 저장 (orchestration bypass)
         _schedule_db["admin"] = f"관리자 비밀 일정: {flag}"
 
+    elif req.vuln_id == "vuln4":
+        _vuln_flags["vuln4"] = flag
+        # 내부 툴 디버그 상태에 flag 저장 (tool call manipulation)
+        _tool_debug_tokens["tool_secret"] = flag
+
     else:
         raise HTTPException(400, f"알 수 없는 vuln_id: {req.vuln_id}")
 
@@ -164,6 +178,8 @@ async def admin_check(x_checker_token: str = Header(...)):
         stored.append({"vuln_id": "vuln2", "flag": _vuln_flags["vuln2"]})
     if _vuln_flags["vuln3"] and _vuln_flags["vuln3"] in str(_schedule_db):
         stored.append({"vuln_id": "vuln3", "flag": _vuln_flags["vuln3"]})
+    if _vuln_flags["vuln4"] and _vuln_flags["vuln4"] in str(_tool_debug_tokens):
+        stored.append({"vuln_id": "vuln4", "flag": _vuln_flags["vuln4"]})
 
     # expect_contains 검증을 위해 모든 flag 값을 응답에 포함
     all_flags_text = " | ".join(
