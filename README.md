@@ -92,7 +92,7 @@ sequenceDiagram
         C->>R: execute poc1.py with TARGET_HOST/TARGET_PORT
         R->>T: PoC packets
         T-->>R: response with HSPACE{...}
-        R-->>C: stdout/stderr/exit_code
+        R-->>C: stdout final line = HSPACE{...}, stderr, exit_code
         C->>C: 성공 시 (round, poc_id) 1회 채점
     end
     Note over C: 성공한 PoC마다 라운드별 attacker +10 · defender -10
@@ -224,7 +224,7 @@ GET  /admin/check     X-Checker-Token  → 응답에 flag 포함
 
 ## PoC 제출 형식
 
-PoC는 하나의 flag를 탈취하는 재현 스크립트다. coordinator는 제출된 `poc*.py`를 격리된 runner에서 실행하고, 실행 결과의 stdout/stderr/응답 로그에서 flag 패턴을 찾는다.
+PoC는 하나의 flag를 탈취하는 재현 스크립트다. coordinator는 제출된 `poc*.py`를 격리된 runner에서 실행하고, stdout의 마지막 non-empty line이 현재 라운드의 유효한 flag인지 확인한다.
 
 ```bash
 TARGET_HOST=10.89.21.10 TARGET_PORT=8000 python poc1.py
@@ -234,7 +234,7 @@ TARGET_HOST=10.89.21.10 TARGET_PORT=8000 python poc1.py
 |---|---|
 | 파일명 | `poc1.py`, `poc2.py` 등 Python 단일 파일 |
 | 입력 | `TARGET_HOST`, `TARGET_PORT`, 필요 시 `TARGET_TEAM`, `FLAG_ID` 환경변수 |
-| 출력 | 탈취한 `HSPACE{...}`를 stdout 또는 응답 본문에 포함 |
+| 출력 | stdout의 마지막 non-empty line에 탈취한 `HSPACE{...}` 출력 |
 | 네트워크 | runner에서 target-net으로 HTTP/TCP 패킷 전송 |
 | 제한 | 시간 제한, 파일시스템 격리, 외부 인터넷 차단 |
 | provenance | 제공 SDK의 `submit_poc()`로 제출해야 하며, SDK가 run id를 자동 첨부 |

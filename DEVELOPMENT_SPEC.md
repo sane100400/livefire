@@ -106,7 +106,7 @@ accepted PoC를 라운드마다 실행하는 sandbox.
 - 외부 인터넷: 차단
 - 파일시스템: read-only base + per-run tmp
 - 제한: timeout, stdout/stderr size cap, memory/CPU limit
-- 출력: exit code, duration, stdout/stderr hash, 발견 flag 목록
+- 출력: exit code, duration, stdout/stderr hash, stdout 마지막 non-empty line에서 검증한 flag 목록
 
 ## API 명세
 
@@ -427,7 +427,7 @@ teamA -> teamB -> teamC -> teamD -> teamE -> teamF -> teamA
 PoC 성공 조건:
 
 - runner 실행이 timeout 없이 종료된다.
-- stdout/stderr 또는 captured response에서 `HSPACE{[a-f0-9]{32}}`가 발견된다.
+- stdout의 마지막 non-empty line에서 `HSPACE{[a-f0-9]{32}}`가 발견된다.
 - flag가 현재 또는 해당 라운드의 active flag로 확인된다.
 - flag의 `team_id`가 PoC의 `target_team`과 일치한다.
 - flag의 `vuln_id`가 PoC의 `flag_id`와 일치한다.
