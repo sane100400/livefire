@@ -4,7 +4,7 @@
 라운드 시작 시 각 팀의 attack_agent 이미지를 백그라운드로 실행.
 컨테이너에는 아래 환경 변수가 전달된다:
 
-  COORDINATOR_URL  코디네이터 엔드포인트 (예: http://172.20.0.2:9000)
+  COORDINATOR_URL  코디네이터 엔드포인트 (예: http://10.89.20.2:9000)
   TEAM_ID          이 컨테이너를 실행한 팀 ID (예: teamA)
   MODE             attack
   TARGET_TEAM      이번 agent run의 타겟 팀

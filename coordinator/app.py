@@ -26,7 +26,7 @@ from config import (
     VULN_SPEC_DIR, DB_PATH,
     OPENROUTER_API_KEY, OPENROUTER_BASE_URL,
     DATA_DIR, POC_TIMEOUT_SEC, POC_MAX_BYTES, POC_OUTPUT_MAX_BYTES,
-    ENABLE_LEGACY_SUBMIT_FLAG,
+    POC_RUNNER_MODE, POC_DOCKER_NETWORK, POC_DOCKER_IMAGE, POC_HOST_DATA_DIR,
 )
 from rotation import (
     assert_attack_allowed,
@@ -38,7 +38,7 @@ from rotation import (
 from state import GameState
 from scorer import (
     load_vuln_specs, check_availability,
-    scan_response_for_flags, verify_and_record_flag, compute_round_scores,
+    scan_response_for_flags, compute_round_scores,
 )
 from agent_runner import run_attack_agents, stop_round_agents
 from poc_runner import run_pocs_for_round
@@ -85,11 +85,6 @@ class AttackRequest(BaseModel):
     session_id: str | None = None
     history: list[dict] | None = None
     step_cost: float = 0.0   # 감사 로그용 (서버에서 강제하지 않음)
-
-
-class FlagSubmitRequest(BaseModel):
-    attacker_team: str
-    flag: str
 
 
 class ServiceDeployedRequest(BaseModel):
@@ -646,6 +641,10 @@ def run_pocs(req: RunPocsRequest, x_admin_secret: str = Header(...)):
         attack_reward=ATTACK_REWARD,
         attack_penalty=ATTACK_PENALTY,
         only_poc_id=req.only_poc_id,
+        runner_mode=POC_RUNNER_MODE,
+        docker_network=POC_DOCKER_NETWORK,
+        docker_image=POC_DOCKER_IMAGE,
+        host_data_dir=POC_HOST_DATA_DIR,
     )
     return {"round": round_num, "results": results}
 
@@ -658,46 +657,6 @@ def list_poc_results(
 ):
     verify_admin(x_admin_secret)
     return {"results": db.list_poc_results(round_num=round_num, limit=limit)}
-
-
-# ── flag 제출 엔드포인트 ───────────────────────────────────────────────
-
-@app.post("/submit-flag")
-@limiter.limit("30/minute")
-async def submit_flag(request: Request, req: FlagSubmitRequest, x_team_token: str = Header(...)):
-    if not ENABLE_LEGACY_SUBMIT_FLAG:
-        raise HTTPException(410, "legacy /submit-flag 비활성화됨. /pocs PoC 제출/재실행 채점을 사용하세요.")
-
-    # 팀 토큰 인증
-    verify_team_token(req.attacker_team, x_team_token)
-
-    if not state.round_active:
-        raise HTTPException(400, "진행 중인 라운드 없음")
-
-    result = verify_and_record_flag(
-        flag=req.flag,
-        attacker=req.attacker_team,
-        round_num=state.current_round,
-    )
-
-    if result is None:
-        return {"scored": False, "message": "오답, 만료된 flag, 자기 팀 flag, 또는 이미 제출됨"}
-
-    # 점수 즉시 반영
-    db.update_score(req.attacker_team, ATTACK_REWARD)
-    db.update_score(result["defender"], -ATTACK_PENALTY)
-
-    # round_exploits에도 기록 (scoreboard 표시용)
-    state.record_exploit(req.attacker_team, result["defender"])
-
-    return {
-        "scored": True,
-        "attacker": req.attacker_team,
-        "defender": result["defender"],
-        "vuln_id": result["vuln_id"],
-        "reward": ATTACK_REWARD,
-        "message": f"{result['defender']}의 {result['vuln_id']} flag 탈취 성공! +{ATTACK_REWARD}점",
-    }
 
 
 # ── 어드민 엔드포인트 ─────────────────────────────────────────────────
@@ -722,7 +681,7 @@ async def start_round(
     state.start_round(next_round)
 
     # flag 생성 + 주입
-    round_flags = fm.generate_round_flags(next_round, list(TEAMS.keys()), vuln_specs, inject=True)
+    round_flags = fm.generate_round_flags(next_round, list(TEAMS.keys()), vuln_specs)
 
     # checker 실행
     round_flags_by_team = {
@@ -741,6 +700,10 @@ async def start_round(
         output_max_bytes=POC_OUTPUT_MAX_BYTES,
         attack_reward=ATTACK_REWARD,
         attack_penalty=ATTACK_PENALTY,
+        runner_mode=POC_RUNNER_MODE,
+        docker_network=POC_DOCKER_NETWORK,
+        docker_image=POC_DOCKER_IMAGE,
+        host_data_dir=POC_HOST_DATA_DIR,
     )
 
     # 공격 에이전트 컨테이너 실행
@@ -776,8 +739,9 @@ async def end_round(x_admin_secret: str = Header(...)):
         ATTACK_REWARD, ATTACK_PENALTY, AVAILABILITY_BONUS,
     )
 
-    # DB 점수 반영 (availability bonus)
-    for team, delta in round_result["score_changes"].items():
+    # DB 점수 반영: PoC 점수는 발생 시점에 이미 반영되므로
+    # 라운드 종료 시에는 availability bonus만 적용한다.
+    for team, delta in round_result["availability_score_changes"].items():
         if delta > 0:
             db.update_score(team, delta)
 
@@ -796,8 +760,9 @@ async def end_round(x_admin_secret: str = Header(...)):
         "availability": availability,
         "service_statuses": round_result["service_statuses"],
         "score_changes": round_result["score_changes"],
+        "availability_score_changes": round_result["availability_score_changes"],
+        "poc_score_changes": round_result["poc_score_changes"],
         "scores_after": scores_after,
-        "flag_captures": round_result["flag_captures"],
     }
 
 
@@ -824,6 +789,8 @@ async def service_deployed(req: ServiceDeployedRequest, x_admin_secret: str = He
         req.commit,
         state.current_round,
         vuln_specs,
+        team_info=TEAMS[req.team_id],
+        checker_token=CHECKER_TOKEN,
         pusher_team_id=req.pusher_team_id,
         agent_run_id=req.agent_run_id,
     )
@@ -878,7 +845,6 @@ def get_active_flags(x_admin_secret: str = Header(...), round_num: int | None = 
 
 @app.get("/scoreboard")
 def scoreboard():
-    legacy_exploit_counts = db.get_all_exploit_counts()
     poc_exploit_counts = db.count_successful_pocs_by_attacker()
     service_statuses = db.get_service_statuses()
     current_poc_results = db.list_poc_results(round_num=state.current_round, limit=200)
@@ -893,7 +859,7 @@ def scoreboard():
                 "score": state.scores.get(tid, 0),
                 "turns_used": state.round_attacks.get(tid, 0),
                 "turns_remaining": MAX_ATTACKS_ROUND - state.round_attacks.get(tid, 0),
-                "exploit_count_total": poc_exploit_counts.get(tid, 0) + legacy_exploit_counts.get(tid, 0),
+                "exploit_count_total": poc_exploit_counts.get(tid, 0),
                 "service_status": service_statuses.get(tid, "UNKNOWN"),
                 "attack_targets": get_attack_targets(tid),
             }

@@ -51,12 +51,12 @@ CHECKER_TOKEN = os.getenv("CHECKER_TOKEN", "checker-token-changeme")
 # 팀별 target-net 내부 IP + 호스트 외부 노출 포트
 # docker-compose.yml의 static IP / port 배정과 반드시 일치해야 한다.
 _TEAM_NET = {
-    "teamA": {"ip": "172.21.0.10", "host_port": 8001},
-    "teamB": {"ip": "172.21.0.11", "host_port": 8002},
-    "teamC": {"ip": "172.21.0.12", "host_port": 8003},
-    "teamD": {"ip": "172.21.0.13", "host_port": 8004},
-    "teamE": {"ip": "172.21.0.14", "host_port": 8005},
-    "teamF": {"ip": "172.21.0.15", "host_port": 8006},
+    "teamA": {"ip": "10.89.21.10", "host_port": 8001},
+    "teamB": {"ip": "10.89.21.11", "host_port": 8002},
+    "teamC": {"ip": "10.89.21.12", "host_port": 8003},
+    "teamD": {"ip": "10.89.21.13", "host_port": 8004},
+    "teamE": {"ip": "10.89.21.14", "host_port": 8005},
+    "teamF": {"ip": "10.89.21.15", "host_port": 8006},
 }
 
 router = APIRouter(prefix="/git")
@@ -109,9 +109,11 @@ def init_team_repo(team_id: str) -> Path:
     repo_path = REPOS_DIR / f"{team_id}.git"
     REPOS_DIR.mkdir(parents=True, exist_ok=True)
     if not repo_path.exists():
-        subprocess.run(["git", "init", "--bare", str(repo_path)], check=True)
-        _install_hooks(repo_path, team_id)
+        result = subprocess.run(["git", "init", "--bare", "-b", "main", str(repo_path)], check=False)
+        if result.returncode != 0:
+            subprocess.run(["git", "init", "--bare", str(repo_path)], check=True)
         logger.info("Bare repo 생성: %s", repo_path)
+    _install_hooks(repo_path, team_id)
     return repo_path
 
 
@@ -123,6 +125,7 @@ def init_all_repos(team_ids: list[str]) -> None:
 def _install_hooks(repo_path: Path, team_id: str) -> None:
     """pre-receive / post-receive 훅 스크립트 설치."""
     hooks_dir = repo_path / "hooks"
+    docker_team = team_id.lower()
     net_cfg = _TEAM_NET.get(team_id, {"ip": "0.0.0.0", "host_port": 8000})
     team_ip = net_cfg["ip"]
     host_port = net_cfg["host_port"]
@@ -136,6 +139,7 @@ COORDINATOR_URL="${{COORDINATOR_URL:-http://localhost:9000}}"
 ADMIN_SECRET="${{ADMIN_SECRET:-changeme}}"
 PUSH_USER="${{PUSH_USER:-$TEAM_ID}}"
 VULN_SPEC_DIR="${{VULN_SPEC_DIR:-/app/vuln_specs}}"
+PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
 
 while read oldrev newrev refname; do
     STATUS=$(curl -sf "$COORDINATOR_URL/status" 2>/dev/null)
@@ -180,14 +184,18 @@ while read oldrev newrev refname; do
     git archive "$newrev" | tar -x -C "$TMPDIR" 2>/dev/null
     if [ -f "$TMPDIR/Dockerfile" ]; then
         echo "Dockerfile 빌드 검증 중..."
-        docker build --no-cache -t "and-service-{team_id}-test:pre" "$TMPDIR" >/dev/null 2>&1
+        BUILD_LOG=$(mktemp)
+        docker build --no-cache -t "and-service-{docker_team}-test:pre" "$TMPDIR" >"$BUILD_LOG" 2>&1
         BUILD_RESULT=$?
         rm -rf "$TMPDIR"
-        docker rmi "and-service-{team_id}-test:pre" >/dev/null 2>&1
+        docker rmi "and-service-{docker_team}-test:pre" >/dev/null 2>&1
         if [ $BUILD_RESULT -ne 0 ]; then
             echo "ERROR: Dockerfile 빌드 실패. push 거부됩니다."
+            tail -n 80 "$BUILD_LOG"
+            rm -f "$BUILD_LOG"
             exit 1
         fi
+        rm -f "$BUILD_LOG"
         echo "Dockerfile 빌드 검증 통과"
     else
         rm -rf "$TMPDIR"
@@ -207,6 +215,8 @@ TEAM_ID="{team_id}"
 COORDINATOR_URL="${{COORDINATOR_URL:-http://localhost:9000}}"
 ADMIN_SECRET="${{ADMIN_SECRET:-changeme}}"
 PUSH_USER="${{PUSH_USER:-$TEAM_ID}}"
+VULN_SPEC_DIR="${{VULN_SPEC_DIR:-/app/vuln_specs}}"
+PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
 
 while read oldrev newrev refname; do
     echo "[$TEAM_ID] 서비스 빌드/배포 시작..."
@@ -218,7 +228,7 @@ while read oldrev newrev refname; do
     git archive "$newrev" | tar -x -C "$DEPLOY_DIR"
 
     # docker build
-    docker build -t "and-service-{team_id}:latest" "$DEPLOY_DIR"
+    docker build -t "and-service-{docker_team}:latest" "$DEPLOY_DIR"
     if [ $? -ne 0 ]; then
         echo "ERROR: 빌드 실패"
         rm -rf "$DEPLOY_DIR"
@@ -227,16 +237,17 @@ while read oldrev newrev refname; do
     rm -rf "$DEPLOY_DIR"
 
     # 기존 컨테이너 중지 + 새 컨테이너 시작
-    docker stop "and-service-{team_id}" 2>/dev/null
-    docker rm "and-service-{team_id}" 2>/dev/null
+    docker stop "and-service-{docker_team}" 2>/dev/null
+    docker rm "and-service-{docker_team}" 2>/dev/null
     docker run -d \\
-        --name "and-service-{team_id}" \\
+        --name "and-service-{docker_team}" \\
+        --restart unless-stopped \\
         --network hackathon_target-net \\
         --ip "{team_ip}" \\
         --cpus 0.5 --memory 1g \\
         -p "{host_port}:8000" \\
         -e "CHECKER_TOKEN=$CHECKER_TOKEN" \\
-        "and-service-{team_id}:latest"
+        "and-service-{docker_team}:latest"
 
     if [ $? -ne 0 ]; then
         echo "ERROR: 컨테이너 시작 실패"
@@ -253,6 +264,7 @@ while read oldrev newrev refname; do
             rm -f "$TMP_SPEC"
             exit 1
         fi
+        chmod 0644 "$TMP_SPEC"
         mv "$TMP_SPEC" "$VULN_SPEC_DIR/{team_id}.json"
         echo "[$TEAM_ID] vuln_spec 추출 완료: $VULN_SPEC_DIR/{team_id}.json"
     fi
@@ -292,7 +304,7 @@ async def git_info_refs(
         _require_push_auth(team_id, request.headers.get("Authorization"))
 
     cmd = [service, "--stateless-rpc", "--advertise-refs", str(repo_path)]
-    result = subprocess.run(cmd, capture_output=True, timeout=30)
+    result = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, timeout=30)
     if result.returncode != 0:
         raise HTTPException(500, result.stderr.decode())
 
@@ -319,7 +331,10 @@ async def git_service(team_id: str, service: str, request: Request):
     body = await request.body()
 
     env = os.environ.copy()
-    env["COORDINATOR_URL"] = os.getenv("COORDINATOR_URL", "http://localhost:9000")
+    # Hooks run inside the coordinator process/container. Use loopback here;
+    # agent-facing COORDINATOR_URL may point at the scoring-net address and can
+    # hang when a container tries to call itself through the bridge IP.
+    env["COORDINATOR_URL"] = os.getenv("HOOK_COORDINATOR_URL", "http://127.0.0.1:9000")
     env["ADMIN_SECRET"] = os.getenv("ADMIN_SECRET", "changeme")
     env["CHECKER_TOKEN"] = CHECKER_TOKEN
     env["VULN_SPEC_DIR"] = os.getenv("VULN_SPEC_DIR", str(Path(__file__).parent.parent / "vuln_specs"))
@@ -327,7 +342,8 @@ async def git_service(team_id: str, service: str, request: Request):
         env["PUSH_USER"] = push_user
 
     cmd = [service, "--stateless-rpc", str(repo_path)]
-    result = subprocess.run(
+    result = await asyncio.to_thread(
+        subprocess.run,
         cmd,
         input=body,
         capture_output=True,
@@ -350,6 +366,8 @@ async def handle_service_deployed(
     commit: str,
     current_round: int,
     vuln_specs: dict,
+    team_info: dict | None = None,
+    checker_token: str | None = None,
     pusher_team_id: str | None = None,
     agent_run_id: str | None = None,
 ) -> bool:
@@ -372,8 +390,13 @@ async def handle_service_deployed(
         team_flags = {r["vuln_id"]: r["flag"] for r in flags_in_db if r["team_id"] == team_id}
         if team_flags:
             vulns = vuln_specs.get(team_id, [])
-            fm.inject_flags_to_container(team_id, team_flags, vulns)
-            logger.info("배포 후 flag 재주입: team=%s round=%d", team_id, current_round)
+            if team_info and checker_token:
+                injected = await fm.inject_flags_via_checker(team_info, team_flags, vulns, checker_token)
+                if not injected:
+                    logger.error("배포 후 checker flag 재주입 실패: team=%s round=%d", team_id, current_round)
+            else:
+                logger.warning("team_info/checker_token 없음 — 배포 후 checker flag 재주입 생략: team=%s", team_id)
+            logger.info("배포 후 flag 재주입 시도: team=%s round=%d", team_id, current_round)
 
     return True
 

@@ -79,6 +79,10 @@ docker compose ps
 curl http://localhost:9000/health
 ```
 
+`docker-compose.yml`은 PoC runner가 host Docker daemon에 제출 파일을 마운트할 수 있도록
+`POC_HOST_DATA_DIR=${PWD}/data`를 coordinator에 넘긴다. compose 밖에서 coordinator를 직접
+띄우면 이 값을 host의 `DATA_DIR` 절대경로로 맞춰야 한다.
+
 ### 2-4. 팀별 git 리포 초기화
 
 coordinator가 시작되면 `init_all_repos()`가 자동 실행된다.
@@ -120,6 +124,18 @@ python scripts/gitctf.py submit \
   --token <TOKEN_TEAM_A> \
   --coordinator http://<IP>:9000 \
   --message "patch service"
+```
+
+대회 중 방어팀이 배정받은 다른 팀 repo를 push할 때는 `--repo-team`을 사용한다. 이때 커밋에는 defense agent SDK가 넣은 `Agent-Run-ID` trailer가 있어야 한다.
+
+```bash
+python scripts/gitctf.py submit \
+  --repo patched_teamA_service \
+  --repo-team teamA \
+  --team teamB \
+  --token <DEFENSE_TOKEN_TEAM_B> \
+  --coordinator http://<IP>:9000 \
+  --no-commit
 ```
 
 > raw git fallback: `git remote add organizer http://teamA:<TOKEN>@<IP>:9000/git/teamA && git push organizer main`
@@ -280,7 +296,7 @@ curl http://localhost:9000/health
 ### 특정 팀 서비스 강제 재시작
 
 ```bash
-docker restart and-service-teamA
+docker restart and-service-teama
 # flag는 다음 /admin/inject 호출 시 재주입됨
 # 또는 수동 재주입:
 curl -X POST http://localhost:9000/admin/service-deployed \
@@ -307,9 +323,9 @@ curl -X POST "http://localhost:9000/admin/start-round?force=true" \
 curl "http://localhost:9000/admin/audit-log?attacker=teamA&limit=2000" \
   -H "X-Admin-Secret: $ADMIN_SECRET" > /tmp/audit_teamA.json
 
-# flag 제출 내역 확인 (DB 직접)
+# PoC 재실행 성공 내역 확인 (DB 직접)
 sqlite3 coordinator/game_state.db \
-  "SELECT * FROM flag_submissions WHERE attacker='teamA' ORDER BY ts DESC LIMIT 50;"
+  "SELECT * FROM poc_results WHERE attacker_team='teamA' ORDER BY created_at DESC LIMIT 50;"
 ```
 
 ---
@@ -337,13 +353,13 @@ curl http://localhost:9000/history | python3 -m json.tool > /tmp/full_history.js
 curl "http://localhost:9000/admin/audit-log?limit=2000" \
   -H "X-Admin-Secret: $ADMIN_SECRET" > /tmp/audit_full.json
 
-# 팀별 flag 탈취 집계
+# 팀별 PoC flag 탈취 집계
 sqlite3 coordinator/game_state.db "
-SELECT attacker, defender, vuln_id, COUNT(*) as cnt
-FROM flag_submissions
-WHERE valid=1
-GROUP BY attacker, defender, vuln_id
-ORDER BY attacker, cnt DESC;
+SELECT attacker_team, defender_team, flag_id, COUNT(*) as cnt
+FROM poc_results
+WHERE status='success' AND scored=1
+GROUP BY attacker_team, defender_team, flag_id
+ORDER BY attacker_team, cnt DESC;
 "
 ```
 

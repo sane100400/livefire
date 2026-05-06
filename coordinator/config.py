@@ -11,12 +11,12 @@ def _team_port(team_suffix: str) -> int:
 
 
 TEAMS = {
-    "teamA": {"ip": os.getenv("IP_TEAM_A", "172.21.0.10"), "port": _team_port("A"), "name": "Team A"},
-    "teamB": {"ip": os.getenv("IP_TEAM_B", "172.21.0.11"), "port": _team_port("B"), "name": "Team B"},
-    "teamC": {"ip": os.getenv("IP_TEAM_C", "172.21.0.12"), "port": _team_port("C"), "name": "Team C"},
-    "teamD": {"ip": os.getenv("IP_TEAM_D", "172.21.0.13"), "port": _team_port("D"), "name": "Team D"},
-    "teamE": {"ip": os.getenv("IP_TEAM_E", "172.21.0.14"), "port": _team_port("E"), "name": "Team E"},
-    "teamF": {"ip": os.getenv("IP_TEAM_F", "172.21.0.15"), "port": _team_port("F"), "name": "Team F"},
+    "teamA": {"ip": os.getenv("IP_TEAM_A", "10.89.21.10"), "port": _team_port("A"), "name": "Team A"},
+    "teamB": {"ip": os.getenv("IP_TEAM_B", "10.89.21.11"), "port": _team_port("B"), "name": "Team B"},
+    "teamC": {"ip": os.getenv("IP_TEAM_C", "10.89.21.12"), "port": _team_port("C"), "name": "Team C"},
+    "teamD": {"ip": os.getenv("IP_TEAM_D", "10.89.21.13"), "port": _team_port("D"), "name": "Team D"},
+    "teamE": {"ip": os.getenv("IP_TEAM_E", "10.89.21.14"), "port": _team_port("E"), "name": "Team E"},
+    "teamF": {"ip": os.getenv("IP_TEAM_F", "10.89.21.15"), "port": _team_port("F"), "name": "Team F"},
 }
 TEAM_ORDER = ["teamA", "teamB", "teamC", "teamD", "teamE", "teamF"]
 
@@ -54,14 +54,14 @@ DEFENSE_TOKENS = {
 }
 
 # ── 공격 에이전트 Docker 이미지 (행사 전 팀 제출물 빌드 후 등록) ─────
-# docker build -t and-attack-teamA:latest ./attack_agent_teamA/
+# docker build -t and-attack-teama:latest ./attack_agent_teamA/
 ATTACK_AGENT_IMAGES = {
-    "teamA": "and-attack-teamA:latest",
-    "teamB": "and-attack-teamB:latest",
-    "teamC": "and-attack-teamC:latest",
-    "teamD": "and-attack-teamD:latest",
-    "teamE": "and-attack-teamE:latest",
-    "teamF": "and-attack-teamF:latest",
+    "teamA": "and-attack-teama:latest",
+    "teamB": "and-attack-teamb:latest",
+    "teamC": "and-attack-teamc:latest",
+    "teamD": "and-attack-teamd:latest",
+    "teamE": "and-attack-teame:latest",
+    "teamF": "and-attack-teamf:latest",
 }
 
 COORDINATOR_URL = os.getenv("COORDINATOR_URL", "http://localhost:9000")
@@ -75,9 +75,12 @@ DATA_DIR = os.getenv("DATA_DIR", os.path.join(os.path.dirname(__file__), "..", "
 POC_TIMEOUT_SEC = int(os.getenv("POC_TIMEOUT_SEC", "20"))
 POC_MAX_BYTES = int(os.getenv("POC_MAX_BYTES", str(64 * 1024)))
 POC_OUTPUT_MAX_BYTES = int(os.getenv("POC_OUTPUT_MAX_BYTES", str(64 * 1024)))
-
-# legacy /submit-flag 즉시 채점은 신규 PoC 채점 모델과 충돌하므로 기본 비활성화.
-ENABLE_LEGACY_SUBMIT_FLAG = os.getenv("ENABLE_LEGACY_SUBMIT_FLAG", "0") == "1"
+POC_RUNNER_MODE = os.getenv("POC_RUNNER_MODE", "auto")  # auto / docker / local
+POC_DOCKER_NETWORK = os.getenv("POC_DOCKER_NETWORK", "hackathon_target-net")
+POC_DOCKER_IMAGE = os.getenv("POC_DOCKER_IMAGE", "python:3.11-slim")
+# Docker socket 사용 시 host daemon은 컨테이너 내부 DATA_DIR 경로를 모른다.
+# docker-compose는 이 값을 host의 ./data 절대경로로 넘긴다.
+POC_HOST_DATA_DIR = os.getenv("POC_HOST_DATA_DIR", "")
 
 # ── 파일 경로 ────────────────────────────────────────────────────────
 VULN_SPEC_DIR = os.getenv("VULN_SPEC_DIR", os.path.join(os.path.dirname(__file__), "..", "vuln_specs"))

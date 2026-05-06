@@ -37,7 +37,7 @@ graph LR
 
 ```mermaid
 graph TB
-    subgraph scoring["scoring-net  172.20.0.0/24"]
+    subgraph scoring["scoring-net  10.89.20.0/24"]
         COORD["🖥 coordinator :9000<br/>FastAPI · SQLite WAL<br/>LLM gateway · audit<br/>flag_manager · checker<br/>PoC runner · git smart HTTP"]
         A1["⚔ attack-agent-A"]
         A2["⚔ attack-agent-B"]
@@ -47,9 +47,9 @@ graph TB
         RUN["🧪 poc-runner sandbox"]
     end
 
-    subgraph target["target-net  172.21.0.0/24"]
-        S1["🛡 teamA  172.21.0.10:8000"]
-        S2["🛡 teamB  172.21.0.11:8000"]
+    subgraph target["target-net  10.89.21.0/24"]
+        S1["🛡 teamA  10.89.21.10:8000"]
+        S2["🛡 teamB  10.89.21.11:8000"]
         SN["🛡 ..."]
     end
 
@@ -227,7 +227,7 @@ GET  /admin/check     X-Checker-Token  → 응답에 flag 포함
 PoC는 하나의 flag를 탈취하는 재현 스크립트다. coordinator는 제출된 `poc*.py`를 격리된 runner에서 실행하고, 실행 결과의 stdout/stderr/응답 로그에서 flag 패턴을 찾는다.
 
 ```bash
-TARGET_HOST=172.21.0.10 TARGET_PORT=8000 python poc1.py
+TARGET_HOST=10.89.21.10 TARGET_PORT=8000 python poc1.py
 ```
 
 | 항목 | 규칙 |
@@ -298,7 +298,7 @@ python ../scripts/gitctf.py submit \
 
 ```bash
 # 제공 agent_sdk로 target git snapshot을 분석한 뒤 탐색하고 poc*.py를 생성/제출하도록 구현
-docker build -f attack_agent/Dockerfile -t and-attack-teamA:latest .
+docker build -f attack_agent/Dockerfile -t and-attack-teama:latest .
 # accepted poc*.py는 coordinator가 매 라운드 자동 실행
 ```
 
@@ -358,20 +358,15 @@ hackathon/
 | vuln_spec 자동 추출 | git post-receive에서 `vuln_spec.json` → `vuln_specs/teamX.json` 반영 |
 | 디펜스 토큰 | `DEFENSE_TOKEN_TEAM_X` 별도 지원, 미설정 시 로컬 fallback |
 | Agent SDK/runner | `AgentContext.from_env()`, `/llm`, `/attack`, `/pocs`, commit trailer helper |
-| LLM gateway/provenance | OpenRouter proxy, whitelist 검사, prompt/response hash, `purpose=scan/poc` audit |
+| LLM gateway/provenance | OpenRouter proxy, whitelist 검사, prompt/response hash, `purpose=scan/poc/defense` audit |
 | PoC 제출/검수/실행 | `/pocs`, admin accept/reject, accepted PoC 라운드 재실행 |
 | 팀 서비스 템플릿 | 4-vuln 예시, difficulty 필드, `/admin/inject·check` 포함 |
 | 공격 에이전트 템플릿 | target git snapshot → LLM scan plan → `/attack` → LLM PoC 생성 → `/pocs` 제출 |
 | 방어 에이전트 템플릿 | SDK 기반 defense run + `Agent-Run-ID` 커밋 trailer |
 | 팀 자가검증 | `scripts/verify.py` (독립, 컬러 출력) |
 | 스코어보드 UI | 10초 폴링, 익스플로잇/PoC 결과 표시 |
-| 네트워크 격리 | scoring-net / target-net Docker bridge |
-
-### 🔴 필수 (이벤트 전)
-
-| # | 작업 | 위치 |
-|---|---|---|
-| 1 | **PoC runner sandbox 강화** — MVP 로컬 subprocess를 target-net 전용 컨테이너 실행으로 격리 | `coordinator/poc_runner.py` · `docker-compose.yml` |
+| PoC runner sandbox | Docker socket 기반 runner, target-net 전용, read-only/root 제한, host `DATA_DIR` 마운트 매핑 |
+| 네트워크 격리 | scoring-net / target-net / egress-net Docker bridge |
 
 ### 🟡 권장
 

@@ -1,6 +1,6 @@
 # Development Spec: AI Agent A&D CTF
 
-이 문서는 README의 운영 컨셉을 실제 개발 단위로 고정한다. 현재 구현 기준은 Agent SDK + repo 기반 scan + PoC 라운드 재실행 방식이다. legacy `/submit-flag` 즉시 채점은 기본 비활성화한다.
+이 문서는 README의 운영 컨셉을 실제 개발 단위로 고정한다. 현재 구현 기준은 Agent SDK + repo 기반 scan + PoC 라운드 재실행 방식이다. 즉시 flag 제출 채점은 제거하고 accepted PoC 재실행만 점수화한다.
 
 ## 목표
 
@@ -31,7 +31,6 @@
 | SDK-issued run id | Agent SDK가 자동으로 발급·전달하는 내부 실행 ID |
 | PoC | 하나의 flag 탈취를 재현하는 Python 단일 파일 |
 | accepted PoC | 검수 통과 후 매 라운드 실행 대상이 된 PoC |
-| legacy flag submit | 기존 `/submit-flag` 즉시 채점 방식. MVP 이후 제거 또는 admin-only로 축소 |
 
 ## 시스템 구성
 
@@ -125,7 +124,7 @@ Request:
   "mode": "attack",
   "target_team": "teamC",
   "round_num": 1,
-  "agent_image": "and-attack-teamA:latest",
+  "agent_image": "and-attack-teama:latest",
   "agent_image_digest": "sha256:...",
   "agent_commit": "abc1234"
 }
@@ -291,7 +290,7 @@ Rules:
 
 ## DB 스키마 추가
 
-기존 `audit_log`, `round_exploits`, `flag_submissions`는 legacy와 호환을 위해 남기되, 신규 채점은 아래 테이블을 기준으로 한다.
+기존 `audit_log`, `round_exploits`는 감사와 scoreboard 집계를 위해 유지하고, 신규 채점은 아래 테이블을 기준으로 한다.
 
 ### agent_runs
 
@@ -558,7 +557,7 @@ Acceptance:
 
 1. SLA 주기적 checker loop
 2. scoreboard에 PoC results, service status, agent provenance 노출
-3. legacy `/submit-flag` 제거 또는 admin-only로 축소
+3. 즉시 flag 제출 채점 경로 제거 상태 유지
 4. README, RULEBOOK, ORGANIZER_GUIDE 동기화
 
 Acceptance:
@@ -595,11 +594,11 @@ Acceptance:
 
 ## 개발 준비 체크리스트
 
-- [x] `.env.example`에 `OPENROUTER_API_KEY`, `DATA_DIR`, `POC_TIMEOUT_SEC` 추가
+- [x] `.env.example`에 `OPENROUTER_API_KEY`, `DATA_DIR`, `POC_TIMEOUT_SEC`, `POC_HOST_DATA_DIR` 추가
 - [x] `agent_sdk/` 패키지 생성
 - [x] `defense_agent/` 템플릿 생성
 - [x] `coordinator/rotation.py` 생성
 - [x] `coordinator/poc_runner.py` 생성
 - [x] DB migration 또는 `CREATE TABLE IF NOT EXISTS` 추가
 - [x] README TODO와 본 문서 상태 동기화
-- [x] legacy `/submit-flag` 제거 시점 결정: 기본 비활성화, `ENABLE_LEGACY_SUBMIT_FLAG=1`일 때만 허용
+- [x] 즉시 flag 제출 채점 제거: `/pocs` 제출/재실행만 점수화

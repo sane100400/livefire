@@ -12,6 +12,7 @@ import json
 import os
 import subprocess
 import tarfile
+import base64
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
@@ -191,6 +192,34 @@ class AgentContext:
             "commit": commit,
         }
 
+    def clone_target_repo(
+        self,
+        dest: str | Path = "target_repo",
+        repo_url: Optional[str] = None,
+    ) -> dict:
+        """Clone the assigned target repo through coordinator git HTTP."""
+        target = self.target_team
+        url = repo_url or os.environ.get("TARGET_REPO_URL") or f"{self.coordinator_url}/git/{target}"
+        dest_path = Path(dest).resolve()
+        if dest_path.exists() and any(dest_path.iterdir()):
+            raise AgentSDKError(f"destination is not empty: {dest_path}")
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        result = subprocess.run(
+            ["git", "clone", "--depth", "1", url, str(dest_path)],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise AgentSDKError(f"git clone failed: {result.stderr[-500:]}")
+        commit = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=dest_path,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        return {"path": str(dest_path), "team": target, "commit": commit, "url": url}
+
     def submit_poc(
         self,
         path: str | Path,
@@ -227,6 +256,9 @@ class AgentContext:
         repo = Path(repo_dir)
         full_message = f"{message.rstrip()}\n\nAgent-Run-ID: {self.agent_run_id}"
         subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+        staged = subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=repo)
+        if staged.returncode == 0:
+            raise AgentSDKError("no staged defense patch changes to commit")
         subprocess.run(["git", "commit", "-m", full_message], cwd=repo, check=True)
         result = subprocess.run(
             ["git", "rev-parse", "HEAD"],
@@ -236,6 +268,28 @@ class AgentContext:
             text=True,
         )
         return result.stdout.strip()
+
+    def push_repo(
+        self,
+        repo_dir: str | Path = ".",
+        repo_team: Optional[str] = None,
+        remote_url: Optional[str] = None,
+        branch: str = "main",
+    ) -> None:
+        """Push current HEAD with a temporary Basic Auth header."""
+        repo = Path(repo_dir)
+        target = repo_team or self.target_team
+        url = remote_url or os.environ.get("TARGET_REPO_URL") or f"{self.coordinator_url}/git/{target}"
+        raw = f"{self.team_id}:{self.team_token}".encode("utf-8")
+        header = "Authorization: Basic " + base64.b64encode(raw).decode("ascii")
+        result = subprocess.run(
+            ["git", "-c", f"http.extraHeader={header}", "push", url, f"HEAD:{branch}"],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise AgentSDKError(f"git push failed: {result.stderr[-800:]}")
 
 
 def write_json(path: str | Path, data: object) -> None:

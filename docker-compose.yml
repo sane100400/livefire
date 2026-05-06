@@ -1,5 +1,3 @@
-version: "3.9"
-
 # ── 네트워크 ────────────────────────────────────────────────────────────
 # scoring-net : coordinator 전용 관리 플레인 (팀 서비스는 진입 불가)
 # target-net  : 팀 서비스 6개 (coordinator가 공격 라우팅용으로 접근)
@@ -9,14 +7,18 @@ version: "3.9"
 networks:
   scoring-net:
     driver: bridge
+    internal: true
     ipam:
       config:
-        - subnet: "172.20.0.0/24"
+        - subnet: "10.89.20.0/24"
   target-net:
     driver: bridge
+    internal: true
     ipam:
       config:
-        - subnet: "172.21.0.0/24"
+        - subnet: "10.89.21.0/24"
+  egress-net:
+    driver: bridge
 
 services:
 
@@ -25,21 +27,27 @@ services:
     build: ./coordinator
     networks:
       scoring-net:
-        ipv4_address: 172.20.0.2
+        ipv4_address: 10.89.20.2
       target-net:
-        ipv4_address: 172.21.0.2    # 팀 서비스로 아웃바운드 전용
+        ipv4_address: 10.89.21.2    # 팀 서비스로 아웃바운드 전용
+      egress-net: {}                 # OpenRouter egress 전용
     ports:
       - "9000:9000"                  # 스코어보드/공격 엔드포인트 (호스트 접근)
     env_file: ./coordinator/.env
     environment:
-      - COORDINATOR_URL=http://172.20.0.2:9000
+      - COORDINATOR_URL=http://10.89.20.2:9000
+      - REPOS_DIR=/app/repos
       - VULN_SPEC_DIR=/app/vuln_specs
-      - DB_PATH=/app/game_state.db
+      - DB_PATH=/app/data/game_state.db
       - DATA_DIR=/app/data
       - ATTACK_DOCKER_NETWORK=hackathon_scoring-net
+      - POC_RUNNER_MODE=docker
+      - POC_DOCKER_NETWORK=hackathon_target-net
+      - POC_DOCKER_IMAGE=python:3.11-slim
+      - POC_HOST_DATA_DIR=${PWD}/data
     volumes:
-      - ./coordinator/game_state.db:/app/game_state.db  # 영속성 마운트
       - ./vuln_specs:/app/vuln_specs                    # post-receive에서 teamX.json 추출
+      - ./repos:/app/repos                              # git bare repos
       - ./data:/app/data                                # PoC 제출/실행 결과
       - /var/run/docker.sock:/var/run/docker.sock        # 에이전트 컨테이너 실행용
     restart: unless-stopped
@@ -70,10 +78,10 @@ services:
   # 각 팀 서비스는 target-net에만 연결 — coordinator admin 포트 도달 불가
   #
   # teamA-service:
-  #   image: and-service-teamA:latest
+  #   image: and-service-teama:latest
   #   networks:
   #     target-net:
-  #       ipv4_address: 172.21.0.10
+  #       ipv4_address: 10.89.21.10
   #   ports:
   #     - "8001:8000"
   #   restart: on-failure:3
@@ -84,10 +92,10 @@ services:
   #         memory: "1G"
   #
   # teamB-service:
-  #   image: and-service-teamB:latest
+  #   image: and-service-teamb:latest
   #   networks:
   #     target-net:
-  #       ipv4_address: 172.21.0.11
+  #       ipv4_address: 10.89.21.11
   #   ports:
   #     - "8002:8000"
   #   restart: on-failure:3
@@ -98,37 +106,37 @@ services:
   #         memory: "1G"
   #
   # teamC-service:
-  #   image: and-service-teamC:latest
+  #   image: and-service-teamc:latest
   #   networks:
   #     target-net:
-  #       ipv4_address: 172.21.0.12
+  #       ipv4_address: 10.89.21.12
   #   ports:
   #     - "8003:8000"
   #   restart: on-failure:3
   #
   # teamD-service:
-  #   image: and-service-teamD:latest
+  #   image: and-service-teamd:latest
   #   networks:
   #     target-net:
-  #       ipv4_address: 172.21.0.13
+  #       ipv4_address: 10.89.21.13
   #   ports:
   #     - "8004:8000"
   #   restart: on-failure:3
   #
   # teamE-service:
-  #   image: and-service-teamE:latest
+  #   image: and-service-teame:latest
   #   networks:
   #     target-net:
-  #       ipv4_address: 172.21.0.14
+  #       ipv4_address: 10.89.21.14
   #   ports:
   #     - "8005:8000"
   #   restart: on-failure:3
   #
   # teamF-service:
-  #   image: and-service-teamF:latest
+  #   image: and-service-teamf:latest
   #   networks:
   #     target-net:
-  #       ipv4_address: 172.21.0.15
+  #       ipv4_address: 10.89.21.15
   #   ports:
   #     - "8006:8000"
   #   restart: on-failure:3

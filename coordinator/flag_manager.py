@@ -4,7 +4,8 @@
 라운드 시작 시:
   generate_round_flags(round_num, team_ids, vuln_specs)
     → 팀×취약점별 HSPACE{...} flag 생성 후 DB 저장
-    → inject_flags_to_container()로 서비스 컨테이너에 환경변수 주입
+
+실제 서비스 런타임 주입은 checker spec의 /admin/inject로 수행한다.
 
 라운드 종료 시:
   expire_round_flags(round_num)
@@ -15,22 +16,18 @@ Flag 형식: HSPACE{[a-f0-9]{32}}
   → LLM 응답에서 regex로 쉽게 추출
   → 라운드마다 갱신 → replay 불가
 """
+import asyncio
 import logging
 import re
 import secrets
-import string
-import subprocess
-from typing import Optional
+
+import httpx
 
 import db
 
 logger = logging.getLogger(__name__)
 
 FLAG_PATTERN = re.compile(r"HSPACE\{[a-f0-9]{32}\}")
-
-# docker container 이름 규칙: 팀 서비스는 "and-service-{team_id}" 로 실행
-def _container_name(team_id: str) -> str:
-    return f"and-service-{team_id}"
 
 
 def generate_flag() -> str:
@@ -46,7 +43,6 @@ def generate_round_flags(
     round_num: int,
     team_ids: list[str],
     vuln_specs: dict[str, list],
-    inject: bool = True,
 ) -> dict[str, dict[str, str]]:
     """
     라운드별 팀×취약점 flag 생성 후 DB 저장.
@@ -70,113 +66,79 @@ def generate_round_flags(
             flags[team_id][vuln_id] = flag
             logger.debug("Flag 생성: round=%d team=%s vuln=%s flag=%s", round_num, team_id, vuln_id, flag)
 
-        if inject:
-            inject_flags_to_container(team_id, flags[team_id], vuln_specs.get(team_id, []))
-
     return flags
 
 
-def inject_flags_to_container(
-    team_id: str,
+async def inject_flags_via_checker(
+    team_info: dict,
     team_flags: dict[str, str],
     vulns: list[dict],
+    checker_token: str,
+    timeout: float = 10.0,
+    attempts: int = 10,
+    retry_delay: float = 0.5,
 ) -> bool:
     """
-    실행 중인 서비스 컨테이너에 flag를 env var로 주입.
+    Runtime flag injection through each vuln's checker.inject spec.
 
-    팀 서비스는 os.environ["VULN1_FLAG"] 형태로 읽어야 한다.
-    docker exec으로 /app/flags.env 파일 쓰기 후 SIGHUP을 보내
-    서비스가 reload 하도록 한다.
-
-    컨테이너가 없으면 (로컬 개발 환경 등) 경고만 출력하고 True 반환.
+    This is the canonical path after a service container has already started.
+    It keeps service implementations independent from process env reload
+    behavior and matches the required /admin/inject contract.
     """
-    container = _container_name(team_id)
-    if not _container_running(container):
-        logger.warning("컨테이너 %s 없음 — flag 주입 생략 (로컬 개발 환경?)", container)
-        return True
+    base_url = f"http://{team_info['ip']}:{team_info['port']}"
+    ok = True
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        for vuln in vulns:
+            vuln_id = vuln.get("id")
+            flag = team_flags.get(vuln_id or "")
+            inject_spec = vuln.get("checker", {}).get("inject")
+            if not vuln_id or not flag or not inject_spec:
+                continue
 
-    # /app/flags.env 작성: KEY=VALUE 형식
-    env_lines = []
-    for vuln in vulns:
-        vuln_id = vuln["id"]
-        env_var = vuln.get("flag_env_var", f"{vuln_id.upper()}_FLAG")
-        flag_val = team_flags.get(vuln_id, "")
-        if flag_val:
-            env_lines.append(f"{env_var}={flag_val}")
+            endpoint = inject_spec["endpoint"]
+            method = inject_spec.get("method", "POST").upper()
+            auth_header = inject_spec.get("auth_header", "X-Checker-Token")
+            headers = {auth_header: checker_token}
+            body = _substitute_flag(inject_spec.get("body", {}), flag)
+            url = base_url + endpoint
 
-    env_content = "\n".join(env_lines) + "\n"
+            injected = False
+            last_error = ""
+            for attempt in range(1, attempts + 1):
+                try:
+                    if method == "POST":
+                        resp = await client.post(url, json=body, headers=headers)
+                    elif method == "PUT":
+                        resp = await client.put(url, json=body, headers=headers)
+                    else:
+                        resp = await client.get(url, headers=headers)
+                    if resp.status_code in (200, 201, 204):
+                        injected = True
+                        break
+                    last_error = f"HTTP {resp.status_code}"
+                except Exception as exc:
+                    last_error = str(exc)
 
-    try:
-        # 파일 쓰기
-        write_cmd = [
-            "docker", "exec", container,
-            "sh", "-c", f"printf '%s' '{env_content}' > /app/flags.env",
-        ]
-        result = subprocess.run(write_cmd, capture_output=True, timeout=10)
-        if result.returncode != 0:
-            logger.error("Flag 파일 쓰기 실패 (%s): %s", container, result.stderr.decode())
-            return False
+                if attempt < attempts:
+                    await asyncio.sleep(retry_delay)
 
-        # SIGHUP으로 서비스 reload (PID 1에 보냄)
-        reload_cmd = ["docker", "exec", container, "kill", "-HUP", "1"]
-        subprocess.run(reload_cmd, capture_output=True, timeout=5)
+            if not injected:
+                logger.error("checker flag inject failed after retries: %s %s %s", method, url, last_error)
+                ok = False
+    return ok
 
-        logger.info("Flag 주입 완료: team=%s vulns=%s", team_id, list(team_flags.keys()))
-        return True
 
-    except subprocess.TimeoutExpired:
-        logger.error("Flag 주입 타임아웃: %s", container)
-        return False
-    except Exception as e:
-        logger.error("Flag 주입 오류 (%s): %s", team_id, e)
-        return False
+def _substitute_flag(obj, flag: str):
+    if isinstance(obj, str):
+        return obj.replace("{{FLAG}}", flag)
+    if isinstance(obj, dict):
+        return {k: _substitute_flag(v, flag) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_substitute_flag(v, flag) for v in obj]
+    return obj
 
 
 def expire_round_flags(round_num: int) -> None:
     """라운드 종료 시 해당 라운드의 모든 flag를 만료 처리."""
     db.expire_flags(round_num)
     logger.info("라운드 %d flag 만료 처리 완료", round_num)
-
-
-def verify_flag_submission(
-    flag: str,
-    attacker: str,
-    round_num: int,
-) -> Optional[dict]:
-    """
-    제출된 flag 검증.
-
-    Returns:
-        성공: {"defender": str, "vuln_id": str, "flag": str}
-        실패: None
-    """
-    # active_flags에서 조회
-    record = db.lookup_flag(flag)
-    if not record:
-        return None
-
-    # 라운드 일치 여부 확인 (만료 flag 제출 차단)
-    if record["round_num"] != round_num:
-        return None
-
-    # 자기 팀 flag 제출 차단
-    if record["team_id"] == attacker:
-        return None
-
-    return {
-        "defender": record["team_id"],
-        "vuln_id": record["vuln_id"],
-        "flag": flag,
-    }
-
-
-def _container_running(name: str) -> bool:
-    try:
-        result = subprocess.run(
-            ["docker", "inspect", "--format", "{{.State.Running}}", name],
-            capture_output=True,
-            timeout=5,
-        )
-        return result.returncode == 0 and result.stdout.strip() == b"true"
-    except Exception:
-        return False

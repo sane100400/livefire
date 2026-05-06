@@ -100,19 +100,6 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             UNIQUE(round_num, team_id, vuln_id)
         );
 
-        -- flag 제출 기록 (attacker → 탈취한 flag 제출)
-        CREATE TABLE IF NOT EXISTS flag_submissions (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            ts          TEXT NOT NULL,
-            round_num   INTEGER NOT NULL,
-            attacker    TEXT NOT NULL,
-            flag        TEXT NOT NULL,
-            valid       INTEGER NOT NULL,   -- 1=정답, 0=오답/만료
-            defender    TEXT,               -- valid=1일 때 피해 팀
-            vuln_id     TEXT,               -- valid=1일 때 해당 취약점
-            UNIQUE(attacker, flag)           -- 동일 flag 중복 제출 방지
-        );
-
         -- 팀별 서비스 상태 (checker 결과)
         CREATE TABLE IF NOT EXISTS service_status (
             team_id    TEXT PRIMARY KEY,
@@ -525,54 +512,6 @@ def expire_flags(round_num: int) -> None:
         )
 
 
-# ── flag_submissions ───────────────────────────────────────────────────
-
-def submit_flag(
-    round_num: int,
-    attacker: str,
-    flag: str,
-    valid: bool,
-    defender: Optional[str] = None,
-    vuln_id: Optional[str] = None,
-) -> bool:
-    """제출 기록 저장. 이미 제출된 동일 flag면 False 반환 (중복)."""
-    ts = datetime.now(timezone.utc).isoformat()
-    try:
-        with _get_conn() as conn:
-            conn.execute(
-                "INSERT INTO flag_submissions(ts, round_num, attacker, flag, valid, defender, vuln_id) "
-                "VALUES(?,?,?,?,?,?,?)",
-                (ts, round_num, attacker, flag, int(valid), defender, vuln_id),
-            )
-        return True
-    except sqlite3.IntegrityError:
-        return False  # 중복 제출
-
-
-def get_flag_submissions(round_num: Optional[int] = None, attacker: Optional[str] = None) -> list[dict]:
-    clauses, params = [], []
-    if round_num is not None:
-        clauses.append("round_num=?"); params.append(round_num)
-    if attacker:
-        clauses.append("attacker=?"); params.append(attacker)
-    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
-    rows = _get_conn().execute(
-        f"SELECT * FROM flag_submissions {where} ORDER BY id DESC",
-        params,
-    ).fetchall()
-    return [dict(r) for r in rows]
-
-
-def count_valid_captures(round_num: int) -> dict[str, int]:
-    """라운드 내 팀별 성공 flag 제출 수 {attacker: count}."""
-    rows = _get_conn().execute(
-        "SELECT attacker, COUNT(*) as cnt FROM flag_submissions "
-        "WHERE round_num=? AND valid=1 GROUP BY attacker",
-        (round_num,),
-    ).fetchall()
-    return {r["attacker"]: r["cnt"] for r in rows}
-
-
 # ── service_status ─────────────────────────────────────────────────────
 
 def set_service_status(team_id: str, status: str, detail: str = "") -> None:
@@ -929,6 +868,19 @@ def count_successful_pocs_by_attacker() -> dict[str, int]:
         "WHERE status='success' AND scored=1 GROUP BY attacker_team"
     ).fetchall()
     return {r["attacker_team"]: r["cnt"] for r in rows}
+
+
+def sum_poc_score_deltas(round_num: int, team_ids: list[str]) -> dict[str, int]:
+    changes = {team_id: 0 for team_id in team_ids}
+    rows = _get_conn().execute(
+        "SELECT attacker_team, defender_team, attacker_delta, defender_delta "
+        "FROM poc_results WHERE round_num=? AND scored=1",
+        (round_num,),
+    ).fetchall()
+    for row in rows:
+        changes[row["attacker_team"]] = changes.get(row["attacker_team"], 0) + row["attacker_delta"]
+        changes[row["defender_team"]] = changes.get(row["defender_team"], 0) + row["defender_delta"]
+    return changes
 
 
 # ── service_deployments ───────────────────────────────────────────────

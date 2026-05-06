@@ -77,14 +77,10 @@ class GameState:
                 db.update_score(team, availability_bonus)
                 score_changes[team] += availability_bonus
 
-        # 익스플로잇 점수 (현재 라운드 exploit 목록에서)
+        # PoC exploit 점수는 성공 시점에 즉시 반영된다.
+        # 이 helper는 현재 app.py에서 사용하지 않지만, 호출되더라도
+        # 라운드 종료 시 점수를 이중 반영하지 않도록 availability만 적용한다.
         exploits = db.get_round_exploits(round_num)
-        for e in exploits:
-            attacker, defender = e["attacker"], e["defender"]
-            db.update_score(attacker, attack_reward)
-            score_changes[attacker] = score_changes.get(attacker, 0) + attack_reward
-            db.update_score(defender, -attack_penalty)
-            score_changes[defender] = score_changes.get(defender, 0) - attack_penalty
 
         scores_after = {tid: info["score"] for tid, info in db.get_all_scores().items()}
 
