@@ -57,6 +57,7 @@ graph TB
     A1 & A2 & AN -->|"POST /pocs (poc*.py 제출)"| COORD
     A1 & A2 & AN -->|"Agent SDK: target repo snapshot + /llm + /pocs 자동 처리"| COORD
     D1 & DN -->|"Agent SDK: /llm + git trailer 자동 처리"| COORD
+    COORD -->|"공식 attack/defense agent 컨테이너 실행"| A1 & D1
     COORD -->|"탐색 proxy"| S1 & S2 & SN
     COORD -->|"라운드마다 accepted PoC 실행"| RUN
     RUN -->|"HTTP/TCP 공방 패킷"| S1 & S2 & SN
@@ -156,20 +157,16 @@ stateDiagram-v2
 
 ### 허용 모델 (OpenRouter)
 
-공격·방어 에이전트는 아래 모델만 사용 가능하다. OpenRouter API key는 coordinator만 보유하고, 팀 에이전트는 coordinator의 `/llm` 프록시로만 호출한다.
+개발 과정에서는 고성능 LLM, IDE AI, 별도 오케스트레이션 도구를 사용할 수 있다. 단, 공식 라운드 중 점수와 연결되는 공격·방어 산출물은 반드시 팀 에이전트가 coordinator `/llm` 프록시로 아래 화이트리스트 모델을 호출한 기록을 가져야 한다. OpenRouter API key는 coordinator만 보유하고 팀 에이전트에는 지급하지 않는다.
 
 | 공급사 | 모델 ID | 링크 |
 |---|---|---|
 | Qwen | `qwen/qwen-2.5-14b` | [OpenRouter](https://openrouter.ai/qwen/qwen-2.5-14b) |
-| Qwen | `qwen/qwen-2.5-32b` | [OpenRouter](https://openrouter.ai/qwen/qwen-2.5-32b) |
-| Meta | `meta-llama/llama-3.1-70b` | [OpenRouter](https://openrouter.ai/meta-llama/llama-3.1-70b) |
-| Google | `google/gemma-3-27b` | [OpenRouter](https://openrouter.ai/google/gemma-3-27b) |
 | OpenAI | `openai/gpt-4o-mini` | [OpenRouter](https://openrouter.ai/openai/gpt-4o-mini) |
 | Google | `google/gemini-flash-1.5` | [OpenRouter](https://openrouter.ai/google/gemini-flash-1.5) |
 | Google | `google/gemini-2.0-flash-001` | [OpenRouter](https://openrouter.ai/google/gemini-2.0-flash-001) |
 | Microsoft | `microsoft/phi-4` | [OpenRouter](https://openrouter.ai/microsoft/phi-4) |
 | Mistral | `mistralai/mistral-small-3.1` | [OpenRouter](https://openrouter.ai/mistralai/mistral-small-3.1) |
-| DeepSeek | `deepseek/deepseek-chat` | [OpenRouter](https://openrouter.ai/deepseek/deepseek-chat) |
 | Xiaomi | `xiaomi/mimo` | [OpenRouter](https://openrouter.ai/xiaomi/mimo) |
 
 ### AI 에이전트 경유 증명
@@ -178,7 +175,8 @@ stateDiagram-v2
 
 | 단계 | 강제 조건 |
 |---|---|
-| Agent run 시작 | runner가 컨테이너 시작 시 `/agent-runs`를 자동 호출하고 `mode=attack/defense`, `team_id`, `target_team`, agent image digest, git commit을 기록 |
+| Agent run 시작 | runner가 컨테이너 시작 시 `X-Runner-Secret`으로 `/agent-runs`를 호출하고 `mode=attack/defense`, `team_id`, `target_team`, agent image digest, git commit을 기록 |
+| Run token + SDK 서명 | coordinator가 `agent_run_token`을 발급하고, 이후 `/llm`, `/attack`, `/pocs`, run 종료 API는 `X-Agent-Run-Token`과 Agent SDK HMAC 서명 헤더가 일치해야 통과 |
 | 타겟 repo 스캔 | attack run은 `/agent-runs/{id}/target-repo.tar`로 해당 target 팀 git HEAD snapshot을 받아 LLM `purpose=scan` 입력으로 사용 |
 | LLM 호출 | 팀 코드는 SDK의 `llm()`만 호출. SDK는 `/llm` 프록시를 사용하고 coordinator가 whitelist 모델인지 검사 후 OpenRouter에 대리 호출 |
 | 감사 로그 | SDK/coordinator가 run id, 모델 ID, OpenRouter request id, prompt hash, response hash, token usage, timestamp 저장 |
@@ -202,6 +200,7 @@ ctx.submit_poc("poc1.py", target_team="teamC", flag_id="vuln2", llm_call_id=...)
 
 - 팀 attack/defense agent 컨테이너에는 OpenRouter API key를 주지 않는다.
 - attack/defense agent 컨테이너는 scoring-net에만 붙이고, 외부 인터넷 egress는 차단한다.
+- 운영 환경에서는 `RUNNER_SECRET`을 설정하고 공식 agent 컨테이너에만 주입한다.
 - target 서비스 접근은 탐색 API 또는 PoC runner를 통해서만 허용한다.
 - PoC runner는 accepted PoC 재실행 전용이며 외부 인터넷을 차단한다.
 - 스코어보드와 운영자 대시보드는 각 PoC/패치가 어떤 내부 run id, 모델, agent commit에서 나왔는지 표시한다.
@@ -244,7 +243,7 @@ TARGET_HOST=10.89.21.10 TARGET_PORT=8000 python poc1.py
 ## 운영 규칙 (반-부정행위)
 
 - **AI 에이전트 경유 강제**: 공격 PoC와 방어 패치는 제공 Agent SDK/runner를 통해 제출된 산출물만 accept한다. 사람이 직접 올린 파일이나 수동 git push 산출물은 reject한다.
-- **허용 LLM 강제**: 공격·디펜스 모두 coordinator `/llm` 프록시를 통해 OpenRouter 화이트리스트 모델만 사용한다. 직접 OpenRouter 키 지급 금지.
+- **허용 LLM 강제**: 개발 중 외부 LLM 사용은 허용하지만, 공식 공격·디펜스 런타임은 coordinator `/llm` 프록시를 통해 OpenRouter 화이트리스트 모델만 사용한다. 직접 OpenRouter 키 지급 금지.
 - **모델 감사 로그 공개**: 운영자는 내부 run id, 모델 ID, prompt/response hash, token usage, 산출물 sha256을 확인한다.
 - **온라인 참가자**: **디펜스 금지**. 디펜스 토큰을 오프라인 참가자에게만 발급해 누가 패치했는지 추적.
 - **화면 공유 의무**: 오프라인 참가자는 화이트룸 대형 스크린에 라이브 화면 공유. 비허용 모델이나 개인 API key 사용이 확인되면 즉시 탈락.
@@ -314,6 +313,7 @@ docker build -f attack_agent/Dockerfile -t and-attack-teama:latest .
 ```bash
 # 제공 agent_sdk/git wrapper를 사용해 받은 사이트를 패치
 docker build -f defense_agent/Dockerfile -t and-defense-teamA:latest .
+# coordinator가 공식 defense agent 컨테이너를 라운드마다 실행
 # SDK가 Agent-Run-ID 커밋 trailer를 자동으로 붙여 git push
 ```
 
@@ -371,7 +371,7 @@ hackathon/
 | PoC 제출/검수/실행 | `/pocs`, admin accept/reject, accepted PoC 라운드 재실행 |
 | 팀 서비스 템플릿 | 4-vuln 예시, difficulty 필드, `/admin/inject·check` 포함 |
 | 공격 에이전트 템플릿 | target git snapshot → LLM scan plan → `/attack` → LLM PoC 생성 → `/pocs` 제출 |
-| 방어 에이전트 템플릿 | SDK 기반 defense run + `Agent-Run-ID` 커밋 trailer |
+| 방어 에이전트 템플릿/runner | SDK 기반 defense run + `Agent-Run-ID` 커밋 trailer, coordinator 공식 컨테이너 실행 |
 | 팀 자가검증 | `scripts/verify.py` (독립, 컬러 출력) |
 | 스코어보드 UI | 10초 폴링, 익스플로잇/PoC 결과 표시 |
 | PoC runner sandbox | Docker socket 기반 runner, target-net 전용, read-only/root 제한, host `DATA_DIR` 마운트 매핑 |

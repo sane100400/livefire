@@ -54,6 +54,7 @@ cp .env.example .env
 python3 -c "
 import secrets
 print('ADMIN_SECRET=' + secrets.token_hex(24))
+print('RUNNER_SECRET=' + secrets.token_urlsafe(32))
 for t in 'ABCDEF':
     print(f'TOKEN_TEAM_{t}=' + secrets.token_hex(16))
 " >> .env
@@ -66,6 +67,7 @@ vim .env
 ```
 
 > **팀에게 배포**: 각 팀에게 `TOKEN_TEAM_X` 값만 전달. `ADMIN_SECRET`은 절대 공유 금지.
+> `RUNNER_SECRET`은 공식 agent 컨테이너 run 생성용이다. 참가자에게 직접 공유하지 않는다.
 
 ### 2-3. Docker 네트워크 + 서비스 기동
 
@@ -283,13 +285,13 @@ curl "http://localhost:9000/admin/audit-log?attacker=teamA" \
 
 ### 5-4. 팀 서비스 패치 처리
 
-대회 중 팀이 `scripts/gitctf.py submit` 또는 raw `git push organizer main`을 실행하면 자동으로:
+대회 중 공식 defense agent 컨테이너가 SDK로 패치를 커밋하고 push하면 자동으로:
 1. Dockerfile 빌드 검증
 2. `vuln_spec.json` 수정 시 **거부** (21:00 이후 잠금)
 3. Docker 이미지 빌드 → 컨테이너 재시작
 4. 현재 라운드 flag 재주입
 
-별도 조작 불필요. 빌드 실패 시 팀 git push가 거절된다.
+수동 push는 운영 모드에서 허용하지 않는다. 빌드 실패 시 defense agent의 git push가 거절된다.
 
 ---
 

@@ -1,5 +1,8 @@
 import hashlib
+import hmac
 import json
+import secrets
+import time
 import httpx
 from fastapi import FastAPI, HTTPException, Header, Request, Query, UploadFile, File, Form
 from fastapi.responses import JSONResponse, Response
@@ -21,7 +24,8 @@ from config import (
     ATTACK_REWARD, ATTACK_PENALTY, AVAILABILITY_BONUS,
     TOTAL_ROUNDS, COORDINATOR_PORT, ADMIN_SECRET,
     TEAM_TOKENS, ATTACK_AGENT_IMAGES, COORDINATOR_URL,
-    DEFENSE_TOKENS,
+    DEFENSE_TOKENS, DEFENSE_AGENT_IMAGES,
+    RUNNER_SECRET,
     ALLOWED_MODEL_PREFIXES,
     VULN_SPEC_DIR, DB_PATH,
     OPENROUTER_API_KEY, OPENROUTER_BASE_URL,
@@ -40,11 +44,13 @@ from scorer import (
     load_vuln_specs, check_availability,
     scan_response_for_flags, compute_round_scores,
 )
-from agent_runner import run_attack_agents, stop_round_agents
+from agent_runner import run_attack_agents, run_defense_agents, stop_round_agents
 from poc_runner import run_pocs_for_round
 
 import os
 CHECKER_TOKEN = os.getenv("CHECKER_TOKEN", "checker-token-changeme")
+SDK_NAME = "hspace-agent-sdk/1"
+SDK_SIGNATURE_MAX_SKEW_SEC = 300
 
 
 def _team_token_key(request: Request) -> str:
@@ -179,6 +185,55 @@ def _canonical_hash(data: object) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
+def _hash_run_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _verify_runner_secret(secret: str | None) -> None:
+    if RUNNER_SECRET and not secrets.compare_digest(secret or "", RUNNER_SECRET):
+        raise HTTPException(403, "runner secret 불일치")
+
+
+def _verify_run_token(run: dict, token: str | None) -> None:
+    expected = run.get("run_token_hash")
+    if not expected:
+        return
+    if not token or not secrets.compare_digest(_hash_run_token(token), expected):
+        raise HTTPException(403, "agent run token 불일치")
+
+
+def _sdk_signature(run: dict, method: str, path: str, timestamp: str) -> str:
+    key = str(run.get("run_token_hash") or "").encode("utf-8")
+    payload = "\n".join([method.upper(), path, run["id"], timestamp]).encode("utf-8")
+    return hmac.new(key, payload, hashlib.sha256).hexdigest()
+
+
+def _verify_sdk_request(
+    request: Request,
+    run: dict,
+    token: str | None,
+    sdk_name: str | None,
+    timestamp: str | None,
+    signature: str | None,
+) -> None:
+    _verify_run_token(run, token)
+    if not run.get("run_token_hash"):
+        return
+    if sdk_name != SDK_NAME:
+        raise HTTPException(403, "Agent SDK 요청만 허용")
+    if not timestamp or not signature:
+        raise HTTPException(403, "Agent SDK 서명 헤더 누락")
+    try:
+        ts = int(timestamp)
+    except ValueError as exc:
+        raise HTTPException(403, "Agent SDK timestamp 형식 오류") from exc
+    if abs(int(time.time()) - ts) > SDK_SIGNATURE_MAX_SKEW_SEC:
+        raise HTTPException(403, "Agent SDK timestamp 만료")
+    expected = _sdk_signature(run, request.method, request.url.path, timestamp)
+    if not secrets.compare_digest(signature, expected):
+        raise HTTPException(403, "Agent SDK 서명 불일치")
+
+
 def _validate_agent_run_request(req: AgentRunCreateRequest) -> None:
     if req.team_id not in TEAMS:
         raise HTTPException(400, "알 수 없는 팀")
@@ -239,22 +294,33 @@ def health():
 # ── agent provenance / LLM gateway ────────────────────────────────────
 
 @app.post("/agent-runs")
-def create_agent_run(req: AgentRunCreateRequest, x_team_token: str = Header(...)):
+def create_agent_run(
+    req: AgentRunCreateRequest,
+    x_team_token: str = Header(...),
+    x_runner_secret: str | None = Header(default=None),
+    x_agent_sdk: str | None = Header(default=None),
+):
     verify_agent_token(req.team_id, req.mode, x_team_token)
+    _verify_runner_secret(x_runner_secret)
+    if RUNNER_SECRET and x_agent_sdk != SDK_NAME:
+        raise HTTPException(403, "Agent SDK 요청만 허용")
     _validate_agent_run_request(req)
 
+    run_token = secrets.token_urlsafe(32)
     run = db.create_agent_run(
         run_id=str(uuid4()),
         team_id=req.team_id,
         mode=req.mode,
         target_team=req.target_team,
         round_num=req.round_num,
+        run_token_hash=_hash_run_token(run_token),
         agent_image=req.agent_image,
         agent_image_digest=req.agent_image_digest,
         agent_commit=req.agent_commit,
     )
     return {
         "agent_run_id": run["id"],
+        "agent_run_token": run_token,
         "allowed_models": ALLOWED_MODEL_PREFIXES,
     }
 
@@ -262,11 +328,20 @@ def create_agent_run(req: AgentRunCreateRequest, x_team_token: str = Header(...)
 @app.post("/agent-runs/{run_id}/finish")
 def finish_agent_run(
     run_id: str,
+    request: Request,
     req: AgentRunFinishRequest,
     x_team_token: str = Header(...),
+    x_agent_run_token: str | None = Header(default=None),
+    x_agent_sdk: str | None = Header(default=None),
+    x_agent_sdk_timestamp: str | None = Header(default=None),
+    x_agent_sdk_signature: str | None = Header(default=None),
 ):
     run = _require_run(run_id)
     verify_agent_token(run["team_id"], run["mode"], x_team_token)
+    _verify_sdk_request(
+        request, run, x_agent_run_token, x_agent_sdk,
+        x_agent_sdk_timestamp, x_agent_sdk_signature,
+    )
     if req.status not in {"completed", "failed", "cancelled"}:
         raise HTTPException(400, "status는 completed, failed, cancelled만 허용")
     if not db.finish_agent_run(run_id, req.status, req.error):
@@ -275,9 +350,21 @@ def finish_agent_run(
 
 
 @app.get("/agent-runs/{run_id}/target-repo.tar")
-def target_repo_archive(run_id: str, x_team_token: str = Header(...)):
+def target_repo_archive(
+    request: Request,
+    run_id: str,
+    x_team_token: str = Header(...),
+    x_agent_run_token: str | None = Header(default=None),
+    x_agent_sdk: str | None = Header(default=None),
+    x_agent_sdk_timestamp: str | None = Header(default=None),
+    x_agent_sdk_signature: str | None = Header(default=None),
+):
     run = _require_run(run_id, mode="attack")
     verify_agent_token(run["team_id"], run["mode"], x_team_token)
+    _verify_sdk_request(
+        request, run, x_agent_run_token, x_agent_sdk,
+        x_agent_sdk_timestamp, x_agent_sdk_signature,
+    )
     if run["round_num"] != state.current_round:
         raise HTTPException(400, "agent run round 불일치")
     if not state.round_active:
@@ -296,9 +383,21 @@ def target_repo_archive(run_id: str, x_team_token: str = Header(...)):
 
 
 @app.post("/llm")
-async def llm_gateway(req: LLMRequest, x_team_token: str = Header(...)):
+async def llm_gateway(
+    request: Request,
+    req: LLMRequest,
+    x_team_token: str = Header(...),
+    x_agent_run_token: str | None = Header(default=None),
+    x_agent_sdk: str | None = Header(default=None),
+    x_agent_sdk_timestamp: str | None = Header(default=None),
+    x_agent_sdk_signature: str | None = Header(default=None),
+):
     run = _require_run(req.agent_run_id)
     verify_agent_token(run["team_id"], run["mode"], x_team_token)
+    _verify_sdk_request(
+        request, run, x_agent_run_token, x_agent_sdk,
+        x_agent_sdk_timestamp, x_agent_sdk_signature,
+    )
     _check_llm_purpose(req.purpose)
 
     prompt_hash = _canonical_hash(
@@ -414,7 +513,15 @@ async def llm_gateway(req: LLMRequest, x_team_token: str = Header(...)):
 
 @app.post("/attack")
 @limiter.limit("20/minute")
-async def attack(request: Request, req: AttackRequest, x_team_token: str = Header(...)):
+async def attack(
+    request: Request,
+    req: AttackRequest,
+    x_team_token: str = Header(...),
+    x_agent_run_token: str | None = Header(default=None),
+    x_agent_sdk: str | None = Header(default=None),
+    x_agent_sdk_timestamp: str | None = Header(default=None),
+    x_agent_sdk_signature: str | None = Header(default=None),
+):
     verify_team_token(req.attacker_team, x_team_token)
 
     run = _require_run(
@@ -422,6 +529,10 @@ async def attack(request: Request, req: AttackRequest, x_team_token: str = Heade
         team_id=req.attacker_team,
         mode="attack",
         target_team=req.target_team,
+    )
+    _verify_sdk_request(
+        request, run, x_agent_run_token, x_agent_sdk,
+        x_agent_sdk_timestamp, x_agent_sdk_signature,
     )
     if run["round_num"] != state.current_round:
         raise HTTPException(400, "agent run round 불일치")
@@ -532,6 +643,7 @@ def _validate_poc_static(file_name: str, content: bytes) -> str:
 
 @app.post("/pocs")
 async def submit_poc(
+    request: Request,
     agent_run_id: str = Form(...),
     llm_call_id: int = Form(...),
     attacker_team: str = Form(...),
@@ -540,9 +652,17 @@ async def submit_poc(
     sha256: str = Form(...),
     file: UploadFile = File(...),
     x_team_token: str = Header(...),
+    x_agent_run_token: str | None = Header(default=None),
+    x_agent_sdk: str | None = Header(default=None),
+    x_agent_sdk_timestamp: str | None = Header(default=None),
+    x_agent_sdk_signature: str | None = Header(default=None),
 ):
     verify_team_token(attacker_team, x_team_token)
     run = _require_run(agent_run_id, team_id=attacker_team, mode="attack", target_team=target_team)
+    _verify_sdk_request(
+        request, run, x_agent_run_token, x_agent_sdk,
+        x_agent_sdk_timestamp, x_agent_sdk_signature,
+    )
     if not state.round_active:
         raise HTTPException(400, "진행 중인 라운드 없음")
     if run["round_num"] != state.current_round:
@@ -704,8 +824,9 @@ async def start_round(
         host_data_dir=POC_HOST_DATA_DIR,
     )
 
-    # 공격 에이전트 컨테이너 실행
+    # 공식 공격/방어 에이전트 컨테이너 실행
     run_attack_agents(next_round, TEAMS, COORDINATOR_URL, TEAM_TOKENS, ATTACK_AGENT_IMAGES)
+    run_defense_agents(next_round, TEAMS, COORDINATOR_URL, DEFENSE_TOKENS, DEFENSE_AGENT_IMAGES)
 
     checker_summary = {tid: r.status for tid, r in checker_results.items()}
     return {
@@ -808,6 +929,8 @@ def validate_defense_push(req: DefensePushValidationRequest, x_admin_secret: str
         mode="defense",
         target_team=req.repo_team_id,
     )
+    if run.get("status") != "running":
+        raise HTTPException(403, "이미 종료된 defense run은 push에 사용할 수 없음")
     if run["round_num"] != state.current_round:
         raise HTTPException(403, "defense run round 불일치")
     if get_defense_target(req.pusher_team_id) != req.repo_team_id:

@@ -52,6 +52,11 @@ DEFENSE_TOKENS = {
     "teamF": os.getenv("DEFENSE_TOKEN_TEAM_F", TEAM_TOKENS["teamF"]),
 }
 
+# 공식 agent run 생성 보호용. 운영 환경에서는 반드시 설정하고, coordinator가
+# 실행하는 attack/defense agent 컨테이너에만 주입한다. 미설정이면 로컬 개발
+# 편의를 위해 기존 팀 토큰 기반 run 생성을 허용한다.
+RUNNER_SECRET = os.getenv("RUNNER_SECRET", "")
+
 # ── 공격 에이전트 Docker 이미지 (행사 전 팀 제출물 빌드 후 등록) ─────
 # docker build -t and-attack-teama:latest ./attack_agent_teamA/
 ATTACK_AGENT_IMAGES = {
@@ -61,6 +66,15 @@ ATTACK_AGENT_IMAGES = {
     "teamD": "and-attack-teamd:latest",
     "teamE": "and-attack-teame:latest",
     "teamF": "and-attack-teamf:latest",
+}
+
+DEFENSE_AGENT_IMAGES = {
+    "teamA": "and-defense-teama:latest",
+    "teamB": "and-defense-teamb:latest",
+    "teamC": "and-defense-teamc:latest",
+    "teamD": "and-defense-teamd:latest",
+    "teamE": "and-defense-teame:latest",
+    "teamF": "and-defense-teamf:latest",
 }
 
 COORDINATOR_URL = os.getenv("COORDINATOR_URL", "http://localhost:9000")
@@ -89,20 +103,16 @@ DB_PATH = os.getenv("DB_PATH", os.path.join(os.path.dirname(__file__), "game_sta
 # 선정 기준:
 #   1) OpenRouter에서 실제 사용 가능한 모델
 #   2) 2026년 이전 출시 (신규 플래그십 제외)
-#   3) 7B–14B 급 — 단발 프롬프트로는 한계, 오케스트레이션 시 성능 3× 이상 향상 구간
+#   3) 공식 공격/방어 런타임에서 단발 한계가 분명한 저성능·경량·mini/flash/small 계열
 #
 # 매칭: model ID가 아래 prefix 중 하나로 시작하면 허용.
 # OpenRouter 형식: "{provider}/{model-name}" 또는 "{provider}/{model-name}:free"
 ALLOWED_MODEL_PREFIXES: list[str] = [
     "qwen/qwen-2.5-14b",
-    "qwen/qwen-2.5-32b",
-    "meta-llama/llama-3.1-70b",
-    "google/gemma-3-27b",
     "openai/gpt-4o-mini",
     "google/gemini-flash-1.5",
     "google/gemini-2.0-flash-001",
     "microsoft/phi-4",
     "mistralai/mistral-small-3.1",
-    "deepseek/deepseek-chat",
     "xiaomi/mimo",
 ]

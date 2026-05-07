@@ -1,0 +1,43 @@
+Loaded vuln specs for: []
+1. Direct run create without RUNNER_SECRET: HTTP 403
+{
+  "detail": "runner secret 불일치"
+}
+
+2. SDK run create with RUNNER_SECRET: HTTP 200
+{
+  "agent_run_id": "<agent-run-id>",
+  "agent_run_token": "<issued-run-token>",
+  "allowed_models": [
+    "qwen/qwen-2.5-14b",
+    "openai/gpt-4o-mini",
+    "google/gemini-flash-1.5",
+    "google/gemini-2.0-flash-001",
+    "microsoft/phi-4",
+    "mistralai/mistral-small-3.1",
+    "xiaomi/mimo"
+  ]
+}
+
+3. /llm without SDK signature: HTTP 403
+{
+  "detail": "Agent SDK 요청만 허용"
+}
+
+4. /llm high model rejected: HTTP 403
+{
+  "detail": "허용되지 않은 모델: 'meta-llama/llama-3.1-70b'. 허용 목록: qwen/qwen-2.5-14b, openai/gpt-4o-mini, google/gemini-flash-1.5, google/gemini-2.0-flash-001, microsoft/phi-4, mistralai/mistral-small-3.1, xiaomi/mimo"
+}
+
+5. /llm low model via SDK accepted: HTTP 200
+{
+  "llm_call_id": 2,
+  "model": "openai/gpt-4o-mini",
+  "content": "mock low-model response",
+  "usage": {
+    "prompt_tokens": 1,
+    "completion_tokens": 2,
+    "total_tokens": 3
+  },
+  "request_id": "mock-request-header"
+}

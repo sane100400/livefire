@@ -8,6 +8,10 @@
 대회 중 공격과 방어는 AI agent를 통해 진행된다.
 공격 agent가 PoC를 제출하면 coordinator가 매 라운드 그 PoC를 다시 실행해 flag 탈취 여부로 채점한다.
 
+개발 과정에서는 고성능 LLM, IDE AI, 별도 오케스트레이션 도구를 사용할 수 있다.
+하지만 공식 라운드 중 점수와 연결되는 공격·방어 실행은 제공 SDK와 coordinator `/llm`을 통해
+화이트리스트 저성능 모델을 호출한 기록이 있어야 인정된다.
+
 ---
 
 ## 2. 제출물
@@ -201,7 +205,32 @@ python scripts/gitctf.py verify \
 
 ---
 
-## 7. 경기 흐름
+## 7. 실제 사용 데모 캡처
+
+아래 캡처는 기본 `agent_service` 템플릿과 mock OpenRouter를 사용해 실제 명령을 실행한 결과다.
+행사 표준 검증은 `--repeat 3`이지만, 문서 캡처는 지면을 줄이기 위해 `--repeat 1`로 실행했다.
+
+### 서비스 자가검증 PASS
+
+```bash
+python -m uvicorn main:app --host 127.0.0.1 --port 8010
+python scripts/gitctf.py verify --repo agent_service --host 127.0.0.1 --port 8010 --repeat 1
+```
+
+![서비스 자가검증 PASS](docs/demo/service-verify.png)
+
+### SDK와 낮은 모델 게이트
+
+공식 라운드의 `/llm` 호출은 단순 팀 토큰만으로는 통과하지 않는다.
+coordinator가 실행한 SDK 컨테이너가 `RUNNER_SECRET`으로 run을 만들고,
+이후 `X-Agent-Run-Token`과 SDK HMAC 서명을 붙여야 한다.
+고성능 모델은 SDK 서명이 있어도 거절된다.
+
+![SDK 및 낮은 모델 게이트](docs/demo/sdk-gate.png)
+
+---
+
+## 8. 경기 흐름
 
 1. 팀이 서비스를 `gitctf.py`로 제출한다.
 2. coordinator가 서비스를 빌드하고 target network에 배포한다.
@@ -215,7 +244,7 @@ python scripts/gitctf.py verify \
 
 ---
 
-## 8. 공격과 PoC
+## 9. 공격과 PoC
 
 공격은 SDK를 통해 해야 한다.
 
@@ -261,7 +290,7 @@ PoC 규칙:
 
 ---
 
-## 9. 방어
+## 10. 방어
 
 방어 대상은 고정 rotation으로 정해진다.
 
@@ -298,7 +327,7 @@ ctx.push_repo(repo_dir=repo["path"], repo_team=ctx.target_team)
 
 ---
 
-## 10. 점수
+## 11. 점수
 
 | 이벤트 | 점수 |
 |---|---:|
@@ -317,7 +346,7 @@ ctx.push_repo(repo_dir=repo["path"], repo_team=ctx.target_team)
 
 ---
 
-## 11. Flag
+## 12. Flag
 
 flag 형식:
 
@@ -334,21 +363,21 @@ HSPACE{32자리 hex}
 
 ---
 
-## 12. 금지 사항
+## 13. 금지 사항
 
 아래 행위는 점수 무효 또는 실격 사유다.
 
 - coordinator, scoreboard, Docker host 공격
 - 다른 팀 인프라에 DoS
 - agent 없이 직접 `/attack`, `/pocs` 호출
-- 허용되지 않은 외부 LLM 또는 개인 API key 사용
+- 공식 공격·방어 런타임에서 허용되지 않은 외부 LLM 또는 개인 API key 사용
 - 다른 팀 토큰 탈취 또는 사용
 - `vuln_spec.json`에 없는 숨은 취약점으로 채점 유도
 - flag, PoC, exploit 코드를 팀 외부와 공유
 
 ---
 
-## 13. 우승 조건
+## 14. 우승 조건
 
 20라운드 종료 후 점수가 가장 높은 팀이 우승한다.
 

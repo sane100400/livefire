@@ -110,6 +110,7 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             mode               TEXT NOT NULL CHECK(mode IN ('attack','defense')),
             target_team        TEXT NOT NULL,
             round_num          INTEGER NOT NULL,
+            run_token_hash     TEXT,
             agent_image        TEXT,
             agent_image_digest TEXT,
             agent_commit       TEXT,
@@ -192,6 +193,7 @@ def _create_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "audit_log", "llm_call_id", "INTEGER")
     _ensure_column(conn, "llm_calls", "purpose", "TEXT NOT NULL DEFAULT 'general'")
     _ensure_column(conn, "poc_submissions", "llm_call_id", "INTEGER")
+    _ensure_column(conn, "agent_runs", "run_token_hash", "TEXT")
 
 
 def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
@@ -480,6 +482,7 @@ def create_agent_run(
     mode: str,
     target_team: str,
     round_num: int,
+    run_token_hash: Optional[str] = None,
     agent_image: Optional[str] = None,
     agent_image_digest: Optional[str] = None,
     agent_commit: Optional[str] = None,
@@ -488,14 +491,15 @@ def create_agent_run(
     with _get_conn() as conn:
         conn.execute(
             "INSERT INTO agent_runs(id, team_id, mode, target_team, round_num, "
-            "agent_image, agent_image_digest, agent_commit, started_at) "
-            "VALUES(?,?,?,?,?,?,?,?,?)",
+            "run_token_hash, agent_image, agent_image_digest, agent_commit, started_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?)",
             (
                 run_id,
                 team_id,
                 mode,
                 target_team,
                 round_num,
+                run_token_hash,
                 agent_image,
                 agent_image_digest,
                 agent_commit,

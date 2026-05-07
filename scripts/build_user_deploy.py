@@ -12,6 +12,7 @@ DEST = ROOT / "user_deploy"
 
 COPY_PATHS = [
     "RULEBOOK.md",
+    "docs/demo",
     "agent_sdk",
     "agent_service",
     "attack_agent",
@@ -76,6 +77,23 @@ python scripts/gitctf.py submit \\
 
 ```bash
 docker build -f attack_agent/Dockerfile -t and-attack-teama:latest .
+```
+
+## Agent SDK 최소 사용 예
+
+공식 라운드에서는 운영자가 실행한 컨테이너에 필요한 환경변수가 주입됩니다.
+
+```python
+from agent_sdk import AgentContext
+
+ctx = AgentContext.from_env()
+repo = ctx.fetch_target_repo()
+scan = ctx.llm(
+    model="openai/gpt-4o-mini",
+    messages=[{"role": "user", "content": "scan target"}],
+    purpose="scan",
+)
+result = ctx.attack("payload", llm_call_id=scan["llm_call_id"])
 ```
 
 ## 방어 에이전트 이미지

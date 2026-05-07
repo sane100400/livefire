@@ -7,17 +7,21 @@ LLM gateway calls, PoC upload metadata, and defense commit trailers.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import io
 import json
 import os
 import subprocess
 import tarfile
 import base64
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
 import httpx
+
+SDK_NAME = "hspace-agent-sdk/1"
 
 
 class AgentSDKError(RuntimeError):
@@ -33,6 +37,7 @@ class AgentContext:
     target_team: str
     round_num: int
     agent_run_id: str
+    agent_run_token: str
     allowed_models: list[str]
 
     @classmethod
@@ -48,6 +53,9 @@ class AgentContext:
 
         existing_run = os.environ.get("AGENT_RUN_ID")
         if existing_run:
+            existing_token = os.environ.get("AGENT_RUN_TOKEN")
+            if not existing_token:
+                raise AgentSDKError("AGENT_RUN_TOKEN env is required when AGENT_RUN_ID is set")
             return cls(
                 coordinator_url=coordinator_url,
                 team_id=team_id,
@@ -56,12 +64,18 @@ class AgentContext:
                 target_team=target_team,
                 round_num=round_num,
                 agent_run_id=existing_run,
+                agent_run_token=existing_token,
                 allowed_models=[],
             )
 
+        headers = {"X-Team-Token": team_token, "X-Agent-SDK": SDK_NAME}
+        runner_secret = os.environ.get("RUNNER_SECRET")
+        if runner_secret:
+            headers["X-Runner-Secret"] = runner_secret
+
         resp = httpx.post(
             f"{coordinator_url}/agent-runs",
-            headers={"X-Team-Token": team_token},
+            headers=headers,
             json={
                 "team_id": team_id,
                 "mode": mode,
@@ -84,13 +98,28 @@ class AgentContext:
             target_team=target_team,
             round_num=round_num,
             agent_run_id=data["agent_run_id"],
+            agent_run_token=data["agent_run_token"],
             allowed_models=data.get("allowed_models", []),
         )
 
+    def _headers(self, method: str, path: str) -> dict[str, str]:
+        timestamp = str(int(time.time()))
+        token_hash = hashlib.sha256(self.agent_run_token.encode("utf-8")).hexdigest()
+        payload = "\n".join([method.upper(), path, self.agent_run_id, timestamp]).encode("utf-8")
+        signature = hmac.new(token_hash.encode("utf-8"), payload, hashlib.sha256).hexdigest()
+        return {
+            "X-Team-Token": self.team_token,
+            "X-Agent-Run-Token": self.agent_run_token,
+            "X-Agent-SDK": SDK_NAME,
+            "X-Agent-SDK-Timestamp": timestamp,
+            "X-Agent-SDK-Signature": signature,
+        }
+
     def finish(self, status: str = "completed", error: str = "") -> None:
+        path = f"/agent-runs/{self.agent_run_id}/finish"
         resp = httpx.post(
-            f"{self.coordinator_url}/agent-runs/{self.agent_run_id}/finish",
-            headers={"X-Team-Token": self.team_token},
+            f"{self.coordinator_url}{path}",
+            headers=self._headers("POST", path),
             json={"status": status, "error": error},
             timeout=10.0,
         )
@@ -105,9 +134,10 @@ class AgentContext:
         max_tokens: int = 2048,
         purpose: str = "general",
     ) -> dict:
+        path = "/llm"
         resp = httpx.post(
-            f"{self.coordinator_url}/llm",
-            headers={"X-Team-Token": self.team_token},
+            f"{self.coordinator_url}{path}",
+            headers=self._headers("POST", path),
             json={
                 "agent_run_id": self.agent_run_id,
                 "model": model,
@@ -131,9 +161,10 @@ class AgentContext:
         history: Optional[list[dict[str, Any]]] = None,
     ) -> dict:
         target = target_team or self.target_team
+        path = "/attack"
         resp = httpx.post(
-            f"{self.coordinator_url}/attack",
-            headers={"X-Team-Token": self.team_token},
+            f"{self.coordinator_url}{path}",
+            headers=self._headers("POST", path),
             json={
                 "agent_run_id": self.agent_run_id,
                 "llm_call_id": llm_call_id,
@@ -153,9 +184,10 @@ class AgentContext:
         if self.mode != "attack":
             raise AgentSDKError("fetch_target_repo is only available in attack mode")
 
+        path = f"/agent-runs/{self.agent_run_id}/target-repo.tar"
         resp = httpx.get(
-            f"{self.coordinator_url}/agent-runs/{self.agent_run_id}/target-repo.tar",
-            headers={"X-Team-Token": self.team_token},
+            f"{self.coordinator_url}{path}",
+            headers=self._headers("GET", path),
             timeout=30.0,
         )
         if resp.status_code >= 400:
@@ -231,10 +263,11 @@ class AgentContext:
         data = poc_path.read_bytes()
         sha256 = hashlib.sha256(data).hexdigest()
         target = target_team or self.target_team
+        url_path = "/pocs"
         with poc_path.open("rb") as fh:
             resp = httpx.post(
-                f"{self.coordinator_url}/pocs",
-                headers={"X-Team-Token": self.team_token},
+                f"{self.coordinator_url}{url_path}",
+                headers=self._headers("POST", url_path),
                 data={
                     "agent_run_id": self.agent_run_id,
                     "llm_call_id": str(llm_call_id),

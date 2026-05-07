@@ -214,9 +214,12 @@ class OpenRouterGatewayTests(unittest.TestCase):
         script = textwrap.dedent(
             f"""
             import json
+            import hashlib
+            import hmac
             import os
             import tempfile
             import threading
+            import time
             from http.server import BaseHTTPRequestHandler, HTTPServer
             from pathlib import Path
 
@@ -235,6 +238,7 @@ class OpenRouterGatewayTests(unittest.TestCase):
                 "DEFENSE_TOKEN_TEAM_D": "dtokD",
                 "DEFENSE_TOKEN_TEAM_E": "dtokE",
                 "DEFENSE_TOKEN_TEAM_F": "dtokF",
+                "RUNNER_SECRET": "runner-secret",
                 "OPENROUTER_API_KEY": "test-openrouter-key",
                 "DB_PATH": str(Path(tempfile.mkdtemp()) / "game.db"),
                 "VULN_SPEC_DIR": tempfile.mkdtemp(),
@@ -269,17 +273,64 @@ class OpenRouterGatewayTests(unittest.TestCase):
             from fastapi.testclient import TestClient
             import app
 
+            def sdk_headers(team_token, run_id, run_token, method, path):
+                timestamp = str(int(time.time()))
+                token_hash = hashlib.sha256(run_token.encode()).hexdigest()
+                payload = "\\n".join([method, path, run_id, timestamp]).encode()
+                signature = hmac.new(token_hash.encode(), payload, hashlib.sha256).hexdigest()
+                return {{
+                    "X-Team-Token": team_token,
+                    "X-Agent-Run-Token": run_token,
+                    "X-Agent-SDK": "hspace-agent-sdk/1",
+                    "X-Agent-SDK-Timestamp": timestamp,
+                    "X-Agent-SDK-Signature": signature,
+                }}
+
             with TestClient(app.app) as client:
+                bad_run = client.post(
+                    "/agent-runs",
+                    headers={{"X-Team-Token": "tokA", "X-Agent-SDK": "hspace-agent-sdk/1"}},
+                    json={{"team_id": "teamA", "mode": "attack", "target_team": "teamC", "round_num": 0}},
+                )
+                assert bad_run.status_code == 403, bad_run.text
                 run = client.post(
                     "/agent-runs",
-                    headers={{"X-Team-Token": "tokA"}},
+                    headers={{
+                        "X-Team-Token": "tokA",
+                        "X-Runner-Secret": "runner-secret",
+                        "X-Agent-SDK": "hspace-agent-sdk/1",
+                    }},
                     json={{"team_id": "teamA", "mode": "attack", "target_team": "teamC", "round_num": 0}},
                 )
                 assert run.status_code == 200, run.text
-                run_id = run.json()["agent_run_id"]
-                resp = client.post(
+                run_data = run.json()
+                run_id = run_data["agent_run_id"]
+                run_token = run_data["agent_run_token"]
+                missing_token = client.post(
                     "/llm",
                     headers={{"X-Team-Token": "tokA"}},
+                    json={{
+                        "agent_run_id": run_id,
+                        "model": "openai/gpt-4o-mini",
+                        "messages": [{{"role": "user", "content": "hello"}}],
+                        "purpose": "scan",
+                    }},
+                )
+                assert missing_token.status_code == 403, missing_token.text
+                rejected_model = client.post(
+                    "/llm",
+                    headers=sdk_headers("tokA", run_id, run_token, "POST", "/llm"),
+                    json={{
+                        "agent_run_id": run_id,
+                        "model": "meta-llama/llama-3.1-70b",
+                        "messages": [{{"role": "user", "content": "hello"}}],
+                        "purpose": "scan",
+                    }},
+                )
+                assert rejected_model.status_code == 403, rejected_model.text
+                resp = client.post(
+                    "/llm",
+                    headers=sdk_headers("tokA", run_id, run_token, "POST", "/llm"),
                     json={{
                         "agent_run_id": run_id,
                         "model": "openai/gpt-4o-mini",

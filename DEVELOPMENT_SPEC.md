@@ -7,7 +7,8 @@
 - 팀은 직접 사이트를 만들고 flag 4개를 심는다.
 - 사이트는 시계 방향으로 한 칸 옆 팀이 방어한다.
 - 공격과 방어 산출물은 반드시 팀 AI 에이전트가 만든 것으로 증명되어야 한다.
-- 팀 에이전트는 OpenRouter 화이트리스트 모델만 사용한다.
+- 개발 과정에서는 외부 LLM, IDE AI, 오케스트레이션 LLM 사용을 허용한다.
+- 공식 라운드 중 점수와 연결되는 attack/defense agent 실행은 OpenRouter 화이트리스트 저성능 모델만 사용한다.
 - 팀은 OpenRouter API key를 직접 받지 않고, coordinator의 `/llm` gateway만 사용한다.
 - 공격 에이전트가 제출한 `poc*.py`는 accepted 상태가 되면 매 라운드 1회 재실행된다.
 - PoC가 해당 라운드에 flag를 탈취하면 공격팀 +10, 방어팀 -10을 기록한다.
@@ -29,6 +30,9 @@
 | attacker | PoC를 제출하는 팀 |
 | agent run | attack 또는 defense agent 컨테이너의 1회 실행 |
 | SDK-issued run id | Agent SDK가 자동으로 발급·전달하는 내부 실행 ID |
+| agent run token | run 생성 시 coordinator가 발급하는 per-run bearer token. run id만 아는 직접 호출을 차단한다. |
+| SDK signature | Agent SDK가 method, path, run id, timestamp를 run token hash로 HMAC 서명한 헤더. 공식 산출물 API는 이 서명이 있어야 한다. |
+| runner secret | 운영자가 공식 agent launcher에만 주입하는 secret. 운영 환경에서는 `/agent-runs` 생성에 필요하다. |
 | PoC | 하나의 flag 탈취를 재현하는 Python 단일 파일 |
 | accepted PoC | 검수 통과 후 매 라운드 실행 대상이 된 PoC |
 
@@ -69,6 +73,8 @@ ctx.commit_patch("patch vuln2")
 SDK 책임:
 
 - 컨테이너 시작 시 `/agent-runs` 자동 생성
+- `RUNNER_SECRET`이 환경에 있으면 `/agent-runs` 생성 시 `X-Runner-Secret` 헤더로 전달
+- `/agent-runs` 응답의 `agent_run_token`을 저장하고 이후 API 호출에 `X-Agent-Run-Token`과 SDK HMAC 서명 헤더를 전달
 - `TEAM_ID`, `MODE`, `TARGET_TEAM`, `ROUND`, `COORDINATOR_URL`, `TEAM_TOKEN` env 로드
 - attack mode에서 target repo snapshot을 `/agent-runs/{id}/target-repo.tar`로 가져온다.
 - `/llm` 호출 시 내부 run id 자동 첨부
@@ -95,6 +101,7 @@ SDK 책임:
 - SDK를 사용해 취약점/PoC 결과/서비스 로그를 분석한다.
 - 패치를 만든 뒤 `ctx.commit_patch()` 또는 제공 git wrapper로 커밋한다.
 - SDK가 자동 삽입한 `Agent-Run-ID` trailer가 없는 push는 coordinator에서 거부된다.
+- 운영 환경에서는 coordinator가 defense agent 컨테이너를 실행하고 `RUNNER_SECRET`을 주입한다.
 
 ### poc_runner
 
@@ -110,11 +117,21 @@ accepted PoC를 라운드마다 실행하는 sandbox.
 
 ## API 명세
 
-모든 팀 API는 `X-Team-Token`으로 인증한다. admin API는 `X-Admin-Secret`을 사용한다.
+모든 팀 API는 `X-Team-Token`으로 인증한다. run 생성 후 공식 산출물 API는 추가로
+`X-Agent-Run-Token`과 SDK 서명 헤더를 요구한다. admin API는 `X-Admin-Secret`을 사용한다.
 
 ### POST /agent-runs
 
-Agent SDK/runner만 호출한다.
+Agent SDK/runner만 호출한다. 운영 환경에서 `RUNNER_SECRET`이 설정되어 있으면
+`X-Runner-Secret` 헤더가 일치해야 한다.
+
+Headers:
+
+```http
+X-Team-Token: <team_or_defense_token>
+X-Runner-Secret: <runner_secret>
+X-Agent-SDK: hspace-agent-sdk/1
+```
 
 Request:
 
@@ -135,6 +152,7 @@ Response:
 ```json
 {
   "agent_run_id": "uuid",
+  "agent_run_token": "opaque-run-token",
   "allowed_models": ["openai/gpt-4o-mini"]
 }
 ```
@@ -145,6 +163,7 @@ Rules:
 - attack run은 자기 팀과 자기 방어 대상 사이트를 target으로 둘 수 없다.
 - defense run은 시계 방향으로 배정된 사이트만 target으로 둘 수 있다.
 - 라운드 중복 실행 정책은 mode별로 둔다. MVP는 팀·mode·target·round당 여러 run 허용, dashboard에서 모두 표시한다.
+- 이후 `/llm`, `/attack`, `/pocs`, `/agent-runs/{id}/finish`, `/agent-runs/{id}/target-repo.tar` 호출은 `X-Agent-Run-Token`과 SDK HMAC 서명이 일치해야 한다.
 
 ### POST /agent-runs/{id}/finish
 
@@ -195,6 +214,7 @@ Response:
 Rules:
 
 - `model`은 `ALLOWED_MODEL_PREFIXES`와 prefix match되어야 한다.
+- `X-Agent-Run-Token`과 SDK HMAC 서명이 해당 `agent_run_id`에 발급된 token과 일치해야 한다.
 - request/response 원문은 기본 저장하지 않는다. hash, token usage, model, timestamp만 저장한다.
 - 디버그 모드는 admin 설정으로만 원문 일부 저장 가능하게 한다.
 - `/attack`은 `purpose=scan` LLM call id를 요구한다.
@@ -255,7 +275,8 @@ Accept rules:
 
 - agent run이 존재해야 한다.
 - run의 team/mode/target/round가 제출값과 맞아야 한다.
-- 해당 run에 whitelist `/llm` 호출이 최소 1회 있어야 한다.
+- `X-Agent-Run-Token`과 SDK HMAC 서명이 해당 run에 발급된 token과 일치해야 한다.
+- 해당 run에 `purpose=poc`인 whitelist `/llm` 호출이 있어야 한다.
 - 파일명은 `poc*.py`, 크기는 MVP 기준 64KB 이하.
 - 금지 import 또는 위험 syscall 패턴은 1차 정적 검사에서 reject한다.
 - sha256이 완전히 같으면 기존 PoC로 merge한다.
@@ -463,7 +484,8 @@ Agent-Run-ID: <uuid>
 - run `mode='defense'`.
 - run `team_id`가 push 권한 팀과 같다.
 - run `target_team`이 해당 defender의 defense target과 같다.
-- run에 whitelist `/llm` 호출이 최소 1회 있다.
+- run이 아직 `running` 상태다.
+- run에 `purpose=defense`인 whitelist `/llm` 호출이 최소 1회 있다.
 
 ## 파일 저장
 
