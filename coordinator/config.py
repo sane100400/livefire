@@ -31,7 +31,6 @@ COORDINATOR_PORT    = 9000
 # ── 시크릿 (반드시 .env 에서 로드, 없으면 시작 시 KeyError로 크래시) ─
 ADMIN_SECRET = os.environ["ADMIN_SECRET"]
 
-# ── 크레딧 ──────────────────────────────────────────────────────────
 # ── 팀 인증 토큰 (행사 당일 .env에서 로드 후 각 팀에게 배포) ────────
 TEAM_TOKENS = {
     "teamA": os.environ["TOKEN_TEAM_A"],

@@ -28,10 +28,6 @@
   .bar-wrap { background: #21262d; border-radius: 4px; height: 8px; width: 200px; }
   .bar { background: #238636; border-radius: 4px; height: 8px; transition: width 0.5s; }
   .attacks { color: #8b949e; font-size: 0.85rem; }
-  .credit { font-size: 0.85rem; }
-  .credit-ok { color: #3fb950; }
-  .credit-low { color: #d29922; }
-  .credit-empty { color: #f85149; }
   .exploit-tag { background: #f851491a; border: 1px solid #f8514966; color: #f85149;
                  border-radius: 4px; padding: 2px 6px; font-size: 0.75rem; margin: 2px; display: inline-block; }
 
@@ -50,7 +46,7 @@
   <thead>
     <tr>
       <th>#</th><th>팀</th><th>점수</th><th>점수 비율</th>
-      <th>외부 요청 (이번 라운드)</th><th>크레딧 잔액</th>
+      <th>외부 요청 (이번 라운드)</th><th>서비스 상태</th>
     </tr>
   </thead>
   <tbody id="score-body"></tbody>
@@ -78,8 +74,6 @@ async function refresh() {
     d.scores.forEach((t, i) => {
       const pct = Math.min(100, Math.round(t.score / maxScore * 100));
       const rankClass = i === 0 ? "rank-1" : i === 1 ? "rank-2" : i === 2 ? "rank-3" : "";
-      const credit = t.credit_remaining ?? 0;
-      const creditClass = credit > 1.0 ? "credit-ok" : credit > 0.2 ? "credit-low" : "credit-empty";
       tbody.innerHTML += `
         <tr class="${rankClass}">
           <td>${i + 1}</td>
@@ -89,7 +83,7 @@ async function refresh() {
             <div class="bar-wrap"><div class="bar" style="width:${pct}%"></div></div>
           </td>
           <td class="attacks">${t.turns_used} / 10회 사용 (${t.turns_remaining} 남음)</td>
-          <td class="credit ${creditClass}">$${credit.toFixed(4)}</td>
+          <td class="attacks">${t.service_status}</td>
         </tr>`;
     });
 

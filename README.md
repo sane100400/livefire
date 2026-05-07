@@ -247,7 +247,7 @@ TARGET_HOST=10.89.21.10 TARGET_PORT=8000 python poc1.py
 - **허용 LLM 강제**: 공격·디펜스 모두 coordinator `/llm` 프록시를 통해 OpenRouter 화이트리스트 모델만 사용한다. 직접 OpenRouter 키 지급 금지.
 - **모델 감사 로그 공개**: 운영자는 내부 run id, 모델 ID, prompt/response hash, token usage, 산출물 sha256을 확인한다.
 - **온라인 참가자**: **디펜스 금지**. 디펜스 토큰을 오프라인 참가자에게만 발급해 누가 패치했는지 추적.
-- **화면 공유 의무**: 오프라인 참가자는 화이트룸 대형 스크린에 라이브 화면 공유. ChatGPT/Claude 등 비허용 모델 띄우면 즉시 탈락.
+- **화면 공유 의무**: 오프라인 참가자는 화이트룸 대형 스크린에 라이브 화면 공유. 비허용 모델이나 개인 API key 사용이 확인되면 즉시 탈락.
 - **양심 기반 + 자수 보너스**: 감시 우회 방법을 마지막에 공유하면 보너스 점수.
 - **무임 승차 방지**: 종료 후 구글 폼 + 개인 면담으로 크로스 체크.
 
@@ -278,6 +278,13 @@ cd coordinator && cp .env.example .env
 docker compose up -d
 python scripts/preflight_check.py --repeat 3   # 이벤트 전 전체 검증
 # crontab: */30 21-23,0-7 * * * python3 scripts/advance_round.py
+```
+
+### 참가자 배포 번들
+
+```bash
+python scripts/build_user_deploy.py
+# 생성된 user_deploy/만 참가자에게 배포
 ```
 
 ### 팀 — 서비스 제출
@@ -329,12 +336,14 @@ hackathon/
 ├── defense_agent/        팀 방어 에이전트 템플릿
 ├── agent_sdk/            run 생성 · /llm · PoC 제출 · git trailer helper
 ├── scripts/
+│   ├── build_user_deploy.py 참가자 배포 번들 생성
 │   ├── gitctf.py         팀 서비스 제출 helper
 │   ├── verify.py         팀 자가검증 (독립 실행)
 │   ├── preflight_check.py 이벤트 전 원클릭 검증
 │   └── advance_round.py  cron 라운드 전환
 ├── scoreboard/index.html 실시간 UI (10s 폴링)
 ├── docker-compose.yml    scoring-net / target-net 격리
+├── user_deploy/          참가자 배포용 생성 산출물 (git ignore)
 ├── DEVELOPMENT_SPEC.md   Agent SDK · PoC runner · provenance 개발 명세
 ├── RULEBOOK.md           참가팀 규칙서
 ├── ORGANIZER_GUIDE.md    운영북 (D-7 셋업 → 종료 체크리스트)

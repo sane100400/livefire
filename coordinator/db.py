@@ -2,10 +2,8 @@
 SQLite WAL 영속성 레이어.
 
 모든 상태 변경은 명시적 트랜잭션으로 atomic하게 처리.
-game_state.json을 완전히 대체한다.
 """
 import json
-import os
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -46,8 +44,7 @@ def _create_schema(conn: sqlite3.Connection) -> None:
 
         CREATE TABLE IF NOT EXISTS scores (
             team_id  TEXT PRIMARY KEY,
-            score    INTEGER NOT NULL DEFAULT 1000,
-            credits  REAL    NOT NULL DEFAULT 2.0
+            score    INTEGER NOT NULL DEFAULT 1000
         );
 
         CREATE TABLE IF NOT EXISTS round_attacks (
@@ -81,7 +78,6 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             target        TEXT NOT NULL,
             payload_hash  TEXT NOT NULL,
             model         TEXT,
-            step_cost     REAL,
             exploited     INTEGER NOT NULL,
             scored        INTEGER NOT NULL,
             response_hash TEXT NOT NULL
@@ -380,7 +376,6 @@ def append_audit(
     target: str,
     payload_hash: str,
     model: Optional[str],
-    step_cost: float,
     exploited: bool,
     scored: bool,
     response_hash: str,
@@ -392,10 +387,10 @@ def append_audit(
     with _get_conn() as conn:
         cur = conn.execute(
             "INSERT INTO audit_log(ts, round_num, attacker, target, payload_hash, "
-            "model, step_cost, exploited, scored, response_hash, agent_run_id, llm_call_id) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            "model, exploited, scored, response_hash, agent_run_id, llm_call_id) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
             (ts, round_num, attacker, target, payload_hash,
-             model, step_cost, int(exploited), int(scored), response_hash, agent_run_id, llm_call_id),
+             model, int(exploited), int(scored), response_hash, agent_run_id, llm_call_id),
         )
         return cur.lastrowid
 
@@ -419,58 +414,6 @@ def query_audit(
         f"SELECT * FROM audit_log {where} ORDER BY id DESC LIMIT ?", params
     ).fetchall()
     return [dict(r) for r in rows]
-
-
-# ── migration ──────────────────────────────────────────────────────────
-
-def import_from_json(json_path: str, team_ids: list[str], starting_score: int) -> None:
-    """game_state.json이 존재할 경우 SQLite로 마이그레이션."""
-    if not os.path.exists(json_path):
-        return
-    with open(json_path) as f:
-        data = json.load(f)
-
-    with _get_conn() as conn:
-        # game_meta
-        conn.execute(
-            "UPDATE game_meta SET current_round=?, round_active=?, round_start_ts=? WHERE id=1",
-            (data.get("current_round", 0), int(data.get("round_active", False)), None),
-        )
-        # scores
-        scores = data.get("scores", {})
-        for tid in team_ids:
-            conn.execute(
-                "INSERT INTO scores(team_id, score) VALUES(?,?) "
-                "ON CONFLICT(team_id) DO UPDATE SET score=excluded.score",
-                (tid, scores.get(tid, starting_score)),
-            )
-        # round_exploits
-        current_round = data.get("current_round", 0)
-        for pair in data.get("round_exploits", []):
-            attacker, defender = pair[0], pair[1]
-            ts = datetime.now(timezone.utc).isoformat()
-            try:
-                conn.execute(
-                    "INSERT OR IGNORE INTO round_exploits(attacker, defender, round_num, ts) VALUES(?,?,?,?)",
-                    (attacker, defender, current_round, ts),
-                )
-            except sqlite3.IntegrityError:
-                pass
-        # history
-        for entry in data.get("history", []):
-            conn.execute(
-                "INSERT INTO history(round_num, exploits_json, availability_json, "
-                "score_changes_json, scores_after_json, ended_at) VALUES(?,?,?,?,?,?)",
-                (
-                    entry.get("round", 0),
-                    json.dumps(entry.get("exploits", []), ensure_ascii=False),
-                    json.dumps(entry.get("availability", {}), ensure_ascii=False),
-                    json.dumps(entry.get("score_changes", {}), ensure_ascii=False),
-                    json.dumps(entry.get("scores_after", {}), ensure_ascii=False),
-                    datetime.now(timezone.utc).isoformat(),
-                ),
-            )
-    print(f"[db] game_state.json → game_state.db 마이그레이션 완료")
 
 
 # ── active_flags ───────────────────────────────────────────────────────

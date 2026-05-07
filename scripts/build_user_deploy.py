@@ -1,0 +1,128 @@
+#!/usr/bin/env python3
+"""Build the participant-facing deployment bundle."""
+from __future__ import annotations
+
+import json
+import shutil
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+DEST = ROOT / "user_deploy"
+
+COPY_PATHS = [
+    "RULEBOOK.md",
+    "agent_sdk",
+    "agent_service",
+    "attack_agent",
+    "defense_agent",
+    "scripts/gitctf.py",
+    "scripts/verify.py",
+    "scripts/validate_vulns.py",
+]
+
+EXCLUDE_DIRS = {
+    ".git",
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".venv",
+    "venv",
+    "node_modules",
+    "dist",
+    "build",
+}
+EXCLUDE_SUFFIXES = {".pyc", ".pyo"}
+
+
+README = """# HSPACE Participant Package
+
+이 폴더는 참가자 배포용 파일만 모은 패키지입니다. coordinator, scoreboard, 운영자 문서, 시크릿 템플릿, 런타임 데이터는 포함하지 않습니다.
+
+## 포함 파일
+
+| 경로 | 용도 |
+|---|---|
+| `agent_service/` | 팀 서비스 템플릿. `Dockerfile`, `main.py`, `vuln_spec.json` 포함 |
+| `attack_agent/` | 공격 에이전트 템플릿 |
+| `defense_agent/` | 방어 에이전트 템플릿 |
+| `agent_sdk/` | coordinator 연동 SDK |
+| `scripts/gitctf.py` | 서비스 제출 및 검증 helper |
+| `scripts/verify.py` | 로컬 서비스 자가검증 |
+| `scripts/validate_vulns.py` | 상세 취약점 검증 |
+| `RULEBOOK.md` | 참가팀 규칙서 |
+
+## 서비스 개발
+
+```bash
+cd agent_service
+make run
+make verify
+```
+
+## 서비스 제출
+
+```bash
+python scripts/gitctf.py submit \\
+  --repo agent_service \\
+  --team teamA \\
+  --token "$TEAM_TOKEN" \\
+  --coordinator http://<COORDINATOR_IP>:9000
+```
+
+## 공격 에이전트 이미지
+
+패키지 루트에서 빌드합니다.
+
+```bash
+docker build -f attack_agent/Dockerfile -t and-attack-teama:latest .
+```
+
+## 방어 에이전트 이미지
+
+패키지 루트에서 빌드합니다.
+
+```bash
+docker build -f defense_agent/Dockerfile -t and-defense-teama:latest .
+```
+"""
+
+
+def _ignore(_dir: str, names: list[str]) -> set[str]:
+    ignored: set[str] = set()
+    for name in names:
+        path = Path(name)
+        if name in EXCLUDE_DIRS or path.suffix in EXCLUDE_SUFFIXES:
+            ignored.add(name)
+    return ignored
+
+
+def _copy_path(relative: str) -> None:
+    source = ROOT / relative
+    target = DEST / relative
+    if source.is_dir():
+        shutil.copytree(source, target, ignore=_ignore)
+    else:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+
+
+def main() -> int:
+    if DEST.exists():
+        shutil.rmtree(DEST)
+    DEST.mkdir(parents=True)
+
+    for relative in COPY_PATHS:
+        _copy_path(relative)
+
+    (DEST / "README.md").write_text(README, encoding="utf-8")
+    (DEST / "bundle_manifest.json").write_text(
+        json.dumps({"included": COPY_PATHS}, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    print(f"Built participant bundle: {DEST}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

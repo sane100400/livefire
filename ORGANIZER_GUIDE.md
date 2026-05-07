@@ -99,6 +99,16 @@ http://<코디네이터IP>:9000/git/teamA
 ```
 참가자는 보통 raw git 명령 대신 `scripts/gitctf.py` 제출 helper를 사용한다.
 
+### 2-5. 참가자 배포 번들 생성
+
+운영자 서버 코드와 시크릿 템플릿을 제외하고, 참가자에게 필요한 템플릿과 helper만 모은다.
+
+```bash
+cd /opt/hackathon
+python scripts/build_user_deploy.py
+# user_deploy/ 폴더만 압축해서 참가자에게 전달
+```
+
 ---
 
 ## 3. 팀 서비스 제출 안내 (D-0 ~21:00까지)
@@ -398,6 +408,7 @@ hackathon/
 │   ├── main.py
 │   └── Dockerfile
 ├── scripts/
+│   ├── build_user_deploy.py 참가자 배포 번들 생성
 │   ├── gitctf.py          팀 서비스 제출 helper
 │   ├── verify.py          팀 자가검증 (신규)
 │   ├── validate_vulns.py  주최측 일괄 검증

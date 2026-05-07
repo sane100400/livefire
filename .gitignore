@@ -22,10 +22,10 @@ vuln_specs/team*.json
 # 검증 리포트
 scripts/validation_report.json
 
+# 생성된 참가자 배포 번들
+user_deploy/
+
 # IDE
 .idea/
 .vscode/
 *.swp
-
-# 레거시 (SQLite로 대체됨)
-game_state.json

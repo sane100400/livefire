@@ -47,10 +47,9 @@ class GameState:
 
     # ── 초기화 ────────────────────────────────────────────────────────
 
-    def load(self, db_path: str, json_path: str = "game_state.json") -> None:
-        """DB 초기화 + JSON 마이그레이션(있으면) + 팀 점수 초기화."""
+    def load(self, db_path: str) -> None:
+        """DB 초기화 + 팀 점수 초기화."""
         db.init_db(db_path)
-        db.import_from_json(json_path, self.team_ids, self.starting_score)
         db.init_scores({t: self.starting_score for t in self.team_ids})
         db.reset_round_attacks(self.team_ids)
 

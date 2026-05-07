@@ -84,7 +84,6 @@ class AttackRequest(BaseModel):
     model: str | None = None
     session_id: str | None = None
     history: list[dict] | None = None
-    step_cost: float = 0.0   # 감사 로그용 (서버에서 강제하지 않음)
 
 
 class ServiceDeployedRequest(BaseModel):
@@ -480,7 +479,6 @@ async def attack(request: Request, req: AttackRequest, x_team_token: str = Heade
         target=req.target_team,
         payload_hash=hashlib.sha256(req.payload.encode()).hexdigest(),
         model=llm_call.get("model") or req.model,
-        step_cost=req.step_cost,
         exploited=bool(found_flags),
         scored=False,
         response_hash=hashlib.sha256(response_text.encode()).hexdigest(),
