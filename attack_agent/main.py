@@ -77,8 +77,18 @@ def _parse_scan_plan(text: str) -> list[dict]:
             continue
         flag_id = str(item.get("flag_id") or "").strip()
         payload = str(item.get("payload") or "").strip()
-        if flag_id and payload:
-            probes.append({"flag_id": flag_id, "payload": payload})
+        path = str(item.get("path") or "").strip()
+        if flag_id and (payload or path):
+            probes.append({
+                "flag_id": flag_id,
+                "payload": payload,
+                "path": path or None,
+                "method": str(item.get("method") or "POST").upper(),
+                "json_body": item.get("json_body"),
+                "query": item.get("query"),
+                "headers": item.get("headers"),
+                "data": item.get("data"),
+            })
 
     if not probes:
         raise ValueError("scan LLM response did not contain any usable probes")
@@ -162,8 +172,9 @@ def plan_scan(ctx: AgentContext, repo_info: dict, repo_context: str) -> tuple[in
                 "content": (
                     "You are an autonomous CTF attack agent. Return only JSON. "
                     "Analyze the provided target git repository snapshot, infer likely "
-                    "service vulnerabilities, and create reproducible scan probes for "
-                    "the live target service. Each probe must have flag_id and payload."
+                    "service vulnerabilities, and create reproducible HTTP scan probes for "
+                    "the live target service. Return path/method/json_body when the service "
+                    "does not use the template /chat API."
                 ),
             },
             {
@@ -177,7 +188,10 @@ def plan_scan(ctx: AgentContext, repo_info: dict, repo_context: str) -> tuple[in
                             "probes": [
                                 {
                                     "flag_id": "vuln1",
-                                    "payload": "message to send to /chat",
+                                    "payload": "message or search text",
+                                    "path": "/chat",
+                                    "method": "POST",
+                                    "json_body": {"message": "message or search text"},
                                 }
                             ]
                         },
@@ -196,7 +210,7 @@ def plan_scan(ctx: AgentContext, repo_info: dict, repo_context: str) -> tuple[in
 def build_poc(
     ctx: AgentContext,
     flag_id: str,
-    payload: str,
+    probe: dict,
     observation: dict,
     repo_info: dict,
     repo_context: str,
@@ -220,7 +234,7 @@ def build_poc(
                         "target_team": ctx.target_team,
                         "repo_commit": repo_info.get("commit"),
                         "flag_id": flag_id,
-                        "successful_payload": payload,
+                        "successful_probe": probe,
                         "observation": {
                             "flags_found": observation.get("flags_found", []),
                             "tool_calls": observation.get("tool_calls", []),
@@ -254,13 +268,22 @@ def main() -> None:
             flag_id = item["flag_id"]
             payload = item["payload"]
             try:
-                result = ctx.attack(payload, llm_call_id=scan_llm_call_id)
+                result = ctx.attack(
+                    payload,
+                    llm_call_id=scan_llm_call_id,
+                    path=item.get("path"),
+                    method=item.get("method") or "POST",
+                    json_body=item.get("json_body"),
+                    query=item.get("query"),
+                    headers=item.get("headers"),
+                    data=item.get("data"),
+                )
                 flags_found = result.get("flags_found", [])
                 print(f"  probe {flag_id}: flags={len(flags_found)} turns={result.get('turns_remaining')}")
                 if not flags_found:
                     continue
 
-                poc_llm_call_id, source = build_poc(ctx, flag_id, payload, result, repo_info, repo_context)
+                poc_llm_call_id, source = build_poc(ctx, flag_id, item, result, repo_info, repo_context)
                 path = Path(f"poc_{ctx.target_team}_{flag_id}.py")
                 path.write_text(source, encoding="utf-8")
                 submitted = ctx.submit_poc(path, llm_call_id=poc_llm_call_id, flag_id=flag_id)

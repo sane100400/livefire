@@ -1,6 +1,6 @@
-# Development Spec: AI Agent A&D CTF
+# Development Spec: HSPACE LiveFire AI Agent A&D
 
-이 문서는 README의 운영 컨셉을 실제 개발 단위로 고정한다. 현재 구현 기준은 Agent SDK + repo 기반 scan + PoC 라운드 재실행 방식이다. 즉시 flag 제출 채점은 제거하고 accepted PoC 재실행만 점수화한다.
+이 문서는 README의 운영 컨셉을 실제 개발 단위로 고정한다. 현재 구현 기준은 Agent SDK + repo 기반 scan + PoC 라운드 재실행 방식이다. 즉시 flag 제출 채점은 제거하고, 제출된 PoC를 시스템이 실행해 flag 반환 여부로 점수화한다.
 
 ## 목표
 
@@ -10,9 +10,9 @@
 - 개발 과정에서는 외부 LLM, IDE AI, 오케스트레이션 LLM 사용을 허용한다.
 - 공식 라운드 중 점수와 연결되는 attack/defense agent 실행은 OpenRouter 화이트리스트 저성능 모델만 사용한다.
 - 팀은 OpenRouter API key를 직접 받지 않고, coordinator의 `/llm` gateway만 사용한다.
-- 공격 에이전트가 제출한 `poc*.py`는 accepted 상태가 되면 매 라운드 1회 재실행된다.
+- 공격 에이전트가 제출한 `poc*.py`는 정적 검증을 통과하면 매 라운드 1회 실행된다.
 - PoC가 해당 라운드에 flag를 탈취하면 공격팀 +10, 방어팀 -10을 기록한다.
-- 같은 flag라도 새 accepted PoC가 다음 라운드에 성공하면 다시 점수를 준다.
+- 같은 flag라도 새 PoC가 다음 라운드에 성공하면 다시 점수를 준다.
 
 ## 비목표
 
@@ -34,7 +34,7 @@
 | SDK signature | Agent SDK가 method, path, run id, timestamp를 run token hash로 HMAC 서명한 헤더. 공식 산출물 API는 이 서명이 있어야 한다. |
 | runner secret | 운영자가 공식 agent launcher에만 주입하는 secret. 운영 환경에서는 `/agent-runs` 생성에 필요하다. |
 | PoC | 하나의 flag 탈취를 재현하는 Python 단일 파일 |
-| accepted PoC | 검수 통과 후 매 라운드 실행 대상이 된 PoC |
+| submitted PoC | 정적 검증을 통과해 매 라운드 실행 대상이 된 PoC |
 
 ## 시스템 구성
 
@@ -46,7 +46,7 @@ FastAPI 서버. 다음 책임을 가진다.
 - `/agent-runs` 생성 및 종료 기록
 - `/llm` OpenRouter gateway
 - `/attack` 탐색 proxy 및 rate limit
-- `/pocs` PoC 제출, 검수 상태 관리
+- `/pocs` PoC 제출, 정적 검증, 실행 상태 관리
 - PoC runner 실행 및 결과 채점
 - git smart HTTP 수신, 방어 패치 provenance 검증
 - flag 생성, 주입, 만료
@@ -65,6 +65,7 @@ ctx = AgentContext.from_env()
 repo = ctx.fetch_target_repo()
 scan = ctx.llm(model="openai/gpt-4o-mini", messages=[...], purpose="scan")
 ctx.attack("payload", llm_call_id=scan["llm_call_id"], target_team="teamC")
+ctx.request_target("/api/search", method="POST", json_body={"q": "payload"}, llm_call_id=scan["llm_call_id"])
 poc = ctx.llm(model="openai/gpt-4o-mini", messages=[...], purpose="poc")
 ctx.submit_poc("poc1.py", llm_call_id=poc["llm_call_id"], target_team="teamC", flag_id="vuln2")
 ctx.commit_patch("patch vuln2")
@@ -105,7 +106,7 @@ SDK 책임:
 
 ### poc_runner
 
-accepted PoC를 라운드마다 실행하는 sandbox.
+제출된 PoC를 라운드마다 실행하는 sandbox.
 
 - 입력: `poc_id`, `round_num`, `target_team`, `flag_id`
 - env: `TARGET_HOST`, `TARGET_PORT`, `TARGET_TEAM`, `FLAG_ID`
@@ -243,7 +244,7 @@ Rules:
 - 팀당 10턴/라운드 제한은 `/attack`에만 적용한다.
 - target이 DOWN이면 거부한다.
 - 공격 가능 대상은 자기 사이트와 자기 방어 대상 제외 4개다.
-- 응답에서 flag가 보여도 즉시 점수화하지 않는다. 점수는 accepted PoC 라운드 재실행에서만 발생한다.
+- 응답에서 flag가 보여도 즉시 점수화하지 않는다. 점수는 제출된 PoC를 runner가 실행해 현재 flag를 확인할 때만 발생한다.
 
 ### POST /pocs
 
@@ -266,12 +267,13 @@ Response:
 ```json
 {
   "poc_id": "uuid",
-  "status": "pending",
-  "sha256": "..."
+  "status": "submitted",
+  "sha256": "...",
+  "run_result": {"status": "success"}
 }
 ```
 
-Accept rules:
+Submit rules:
 
 - agent run이 존재해야 한다.
 - run의 team/mode/target/round가 제출값과 맞아야 한다.
@@ -280,19 +282,14 @@ Accept rules:
 - 파일명은 `poc*.py`, 크기는 MVP 기준 64KB 이하.
 - 금지 import 또는 위험 syscall 패턴은 1차 정적 검사에서 reject한다.
 - sha256이 완전히 같으면 기존 PoC로 merge한다.
-- 유사도 검사는 MVP에서는 선택 사항, 운영자 manual accept를 허용한다.
-
-### POST /admin/pocs/{poc_id}/accept
-
-운영자 또는 자동 검수기가 PoC를 accepted 상태로 전환한다.
 
 ### POST /admin/pocs/{poc_id}/reject
 
-reject reason을 기록한다.
+비정상 제출물의 비활성화 사유를 기록한다.
 
 ### POST /admin/run-pocs
 
-현재 라운드의 accepted PoC를 실행한다. `start-round` 직후 또는 cron에서 호출한다.
+현재 라운드의 제출된 PoC를 실행한다. `/pocs` 제출 직후, `start-round` 직후, 또는 cron에서 호출한다.
 
 Request:
 
@@ -368,7 +365,7 @@ CREATE TABLE poc_submissions (
     file_name         TEXT NOT NULL,
     sha256            TEXT NOT NULL,
     storage_path      TEXT NOT NULL,
-    status            TEXT NOT NULL DEFAULT 'pending',
+    status            TEXT NOT NULL DEFAULT 'submitted',
     canonical_poc_id  TEXT,
     review_reason     TEXT,
     created_at        TEXT NOT NULL,
@@ -377,7 +374,7 @@ CREATE TABLE poc_submissions (
 );
 ```
 
-`status`: `pending`, `accepted`, `rejected`, `merged`, `disabled`.
+`status`: `submitted`, `rejected`, `merged`, `disabled`. 기존 DB 호환을 위해 `pending`, `accepted`도 실행 대상으로 취급한다.
 
 ### poc_results
 
@@ -459,7 +456,7 @@ PoC 성공 조건:
 - 성공: attacker +10, defender -10
 - 실패/timeout: 점수 변화 없음
 - target DOWN: `skipped_down`, 점수 변화 없음
-- 같은 flag를 다른 accepted PoC가 다른 라운드에 탈취: 성공 시 +10
+- 같은 flag를 다른 PoC가 다른 라운드에 탈취: 성공 시 +10
 - 같은 PoC가 여러 flag를 뽑아도 PoC에 선언된 `flag_id` 하나만 점수화한다.
 
 ## Git provenance
@@ -531,17 +528,17 @@ Acceptance:
 - 비허용 모델은 403.
 - 팀 컨테이너에 OpenRouter key 없이도 SDK `llm()`이 동작한다.
 
-### Phase 2: PoC 제출과 검수
+### Phase 2: PoC 제출과 자동 실행
 
 1. `poc_submissions` 테이블 추가
 2. `/pocs` multipart 업로드 구현
 3. sha256, 파일명, 크기, run 검증 구현
-4. admin accept/reject API 구현
-5. scoreboard/admin API에서 pending/accepted PoC 표시
+4. 제출 직후 현재 라운드 자동 실행
+5. scoreboard/admin API에서 submitted PoC와 실행 결과 표시
 
 Acceptance:
 
-- SDK `submit_poc()`로 제출하면 pending 생성.
+- SDK `submit_poc()`로 제출하면 submitted 생성 후 시스템이 실행한다.
 - `/llm` 호출 없는 run의 PoC는 reject.
 - 같은 sha256은 merge 처리.
 
@@ -549,7 +546,7 @@ Acceptance:
 
 1. `coordinator/poc_runner.py` 추가
 2. `poc_results` 테이블 추가
-3. accepted PoC 라운드 실행 API 구현
+3. submitted PoC 라운드 실행 API 구현
 4. flag 검증 및 점수 반영
 5. `round_exploits`를 PoC 결과 기반으로 갱신하거나 scoreboard 쿼리를 신규 테이블로 전환
 
@@ -601,7 +598,7 @@ Acceptance:
 ### Integration
 
 - SDK -> `/agent-runs` -> `/llm` -> `/pocs`
-- accepted PoC -> runner -> target service -> score update
+- submitted PoC -> runner -> target service -> score update
 - defense SDK commit -> git push -> trailer 검증 -> deploy
 - target DOWN -> PoC skipped
 

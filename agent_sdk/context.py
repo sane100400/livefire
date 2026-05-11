@@ -159,12 +159,18 @@ class AgentContext:
         target_team: Optional[str] = None,
         session_id: Optional[str] = None,
         history: Optional[list[dict[str, Any]]] = None,
+        path: Optional[str] = None,
+        method: str = "POST",
+        json_body: Any = None,
+        query: Optional[dict[str, Any]] = None,
+        headers: Optional[dict[str, str]] = None,
+        data: Optional[str] = None,
     ) -> dict:
         target = target_team or self.target_team
-        path = "/attack"
+        url_path = "/attack"
         resp = httpx.post(
-            f"{self.coordinator_url}{path}",
-            headers=self._headers("POST", path),
+            f"{self.coordinator_url}{url_path}",
+            headers=self._headers("POST", url_path),
             json={
                 "agent_run_id": self.agent_run_id,
                 "llm_call_id": llm_call_id,
@@ -173,12 +179,42 @@ class AgentContext:
                 "payload": payload,
                 "session_id": session_id,
                 "history": history,
+                "path": path,
+                "method": method,
+                "json_body": json_body,
+                "query": query,
+                "headers": headers,
+                "data": data,
             },
             timeout=40.0,
         )
         if resp.status_code >= 400:
             raise AgentSDKError(f"/attack failed: HTTP {resp.status_code} {resp.text[:300]}")
         return resp.json()
+
+    def request_target(
+        self,
+        path: str,
+        llm_call_id: int,
+        method: str = "GET",
+        json_body: Any = None,
+        query: Optional[dict[str, Any]] = None,
+        headers: Optional[dict[str, str]] = None,
+        data: Optional[str] = None,
+        target_team: Optional[str] = None,
+    ) -> dict:
+        """Send an arbitrary HTTP probe to the assigned target service through coordinator."""
+        return self.attack(
+            payload="",
+            llm_call_id=llm_call_id,
+            target_team=target_team,
+            path=path,
+            method=method,
+            json_body=json_body,
+            query=query,
+            headers=headers,
+            data=data,
+        )
 
     def fetch_target_repo(self, dest: str | Path = "target_repo") -> dict:
         if self.mode != "attack":

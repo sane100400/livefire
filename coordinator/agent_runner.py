@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import subprocess
+from pathlib import Path
 from typing import Dict
 
 from rotation import get_attack_targets, get_defense_target
@@ -27,6 +28,10 @@ logger = logging.getLogger(__name__)
 # Docker 네트워크: docker-compose.yml의 scoring-net 이름
 ATTACK_DOCKER_NETWORK = os.getenv("ATTACK_DOCKER_NETWORK", "hackathon_scoring-net")
 RUNNER_SECRET = os.getenv("RUNNER_SECRET", "")
+AGENT_LOG_DIR = Path(os.getenv(
+    "AGENT_LOG_DIR",
+    str(Path(__file__).parent.parent / "data" / "agent_logs"),
+))
 
 # 라운드별 실행 중인 컨테이너 추적 (cleanup용)
 # key: (team_id, round_num), value: Popen
@@ -64,19 +69,26 @@ def _run_agent_container(
         cmd[-1:-1] = ["-e", f"RUNNER_SECRET={RUNNER_SECRET}"]
 
     try:
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-        )
+        AGENT_LOG_DIR.mkdir(parents=True, exist_ok=True)
+        log_path = AGENT_LOG_DIR / f"round{round_num}-{mode}-{team_id}-to-{target_team}.log"
+        with log_path.open("ab") as log_file:
+            log_file.write(
+                f"\n--- start mode={mode} team={team_id} target={target_team} round={round_num} ---\n".encode()
+            )
+            proc = subprocess.Popen(
+                cmd,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+            )
         _running[(mode, team_id, target_team, round_num)] = proc
         logger.info(
-            "%s 에이전트 시작 mode=%s target=%s (PID %d, 라운드 %d)",
+            "%s 에이전트 시작 mode=%s target=%s (PID %d, 라운드 %d, log=%s)",
             team_id,
             mode,
             target_team,
             proc.pid,
             round_num,
+            log_path,
         )
         return proc
     except FileNotFoundError:

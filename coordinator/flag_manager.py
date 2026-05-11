@@ -5,7 +5,7 @@
   generate_round_flags(round_num, team_ids, vuln_specs)
     → 팀×취약점별 HSPACE{...} flag 생성 후 DB 저장
 
-실제 서비스 런타임 주입은 checker spec의 /admin/inject로 수행한다.
+실제 서비스 런타임 주입은 checker.inject에 선언된 요청으로 수행한다.
 
 라운드 종료 시:
   expire_round_flags(round_num)
@@ -42,7 +42,7 @@ def extract_flags_from_text(text: str) -> list[str]:
 def generate_round_flags(
     round_num: int,
     team_ids: list[str],
-    vuln_specs: dict[str, list],
+    vuln_specs: dict[str, dict | list],
 ) -> dict[str, dict[str, str]]:
     """
     라운드별 팀×취약점 flag 생성 후 DB 저장.
@@ -53,7 +53,7 @@ def generate_round_flags(
     flags: dict[str, dict[str, str]] = {}
 
     for team_id in team_ids:
-        vulns = vuln_specs.get(team_id, [])
+        vulns = _get_vulnerabilities(vuln_specs.get(team_id, []))
         if not vulns:
             logger.warning("팀 %s: vuln_spec 없음, flag 생성 건너뜀", team_id)
             continue
@@ -72,7 +72,7 @@ def generate_round_flags(
 async def inject_flags_via_checker(
     team_info: dict,
     team_flags: dict[str, str],
-    vulns: list[dict],
+    team_spec: dict | list[dict],
     checker_token: str,
     timeout: float = 10.0,
     attempts: int = 10,
@@ -83,9 +83,10 @@ async def inject_flags_via_checker(
 
     This is the canonical path after a service container has already started.
     It keeps service implementations independent from process env reload
-    behavior and matches the required /admin/inject contract.
+    behavior and lets each service declare its own injection API.
     """
     base_url = f"http://{team_info['ip']}:{team_info['port']}"
+    vulns = _get_vulnerabilities(team_spec)
     ok = True
     async with httpx.AsyncClient(timeout=timeout) as client:
         for vuln in vulns:
@@ -98,20 +99,18 @@ async def inject_flags_via_checker(
             endpoint = inject_spec["endpoint"]
             method = inject_spec.get("method", "POST").upper()
             auth_header = inject_spec.get("auth_header", "X-Checker-Token")
-            headers = {auth_header: checker_token}
-            body = _substitute_flag(inject_spec.get("body", {}), flag)
+            headers = _substitute_flag(inject_spec.get("headers", {}), flag=flag, checker_token=checker_token)
+            headers[auth_header] = checker_token
+            params = _substitute_flag(inject_spec.get("params", inject_spec.get("query", {})), flag=flag, checker_token=checker_token)
+            body = _substitute_flag(inject_spec.get("json", inject_spec.get("body", {})), flag=flag, checker_token=checker_token)
+            data = _substitute_flag(inject_spec.get("data"), flag=flag, checker_token=checker_token)
             url = base_url + endpoint
 
             injected = False
             last_error = ""
             for attempt in range(1, attempts + 1):
                 try:
-                    if method == "POST":
-                        resp = await client.post(url, json=body, headers=headers)
-                    elif method == "PUT":
-                        resp = await client.put(url, json=body, headers=headers)
-                    else:
-                        resp = await client.get(url, headers=headers)
+                    resp = await client.request(method, url, headers=headers, params=params, json=body, data=data)
                     if resp.status_code in (200, 201, 204):
                         injected = True
                         break
@@ -128,13 +127,24 @@ async def inject_flags_via_checker(
     return ok
 
 
-def _substitute_flag(obj, flag: str):
+def _get_vulnerabilities(team_spec: dict | list[dict]) -> list[dict]:
+    if isinstance(team_spec, dict):
+        vulns = team_spec.get("vulnerabilities", [])
+        return vulns if isinstance(vulns, list) else []
+    return team_spec if isinstance(team_spec, list) else []
+
+
+def _substitute_flag(obj, flag: str = "", payload: str = "", checker_token: str = ""):
     if isinstance(obj, str):
-        return obj.replace("{{FLAG}}", flag)
+        return (
+            obj.replace("{{FLAG}}", flag)
+            .replace("{{PAYLOAD}}", payload)
+            .replace("{{CHECKER_TOKEN}}", checker_token)
+        )
     if isinstance(obj, dict):
-        return {k: _substitute_flag(v, flag) for k, v in obj.items()}
+        return {k: _substitute_flag(v, flag=flag, payload=payload, checker_token=checker_token) for k, v in obj.items()}
     if isinstance(obj, list):
-        return [_substitute_flag(v, flag) for v in obj]
+        return [_substitute_flag(v, flag=flag, payload=payload, checker_token=checker_token) for v in obj]
     return obj
 
 

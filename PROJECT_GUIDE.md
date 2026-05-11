@@ -8,7 +8,7 @@
 - 참가팀은 `agent_service/`를 바탕으로 "쓰기 싫은 사이트"를 만들고 취약점 4개를 심습니다.
 - 운영자는 팀 서비스를 Docker 이미지로 올리고, `coordinator`를 통해 flag 주입, SLA 체크, PoC 실행, 점수 계산을 합니다.
 - 공격/방어 산출물은 팀 에이전트가 `agent_sdk/`를 통해 제출해야 하며, LLM 호출 기록과 산출물 해시가 남습니다.
-- 점수는 라운드마다 `accepted` PoC가 현재 flag를 탈취하면 공격팀 `+10`, 방어팀 `-10`, 서비스가 정상 상태이면 가용성 `+10`입니다.
+- 점수는 시스템이 제출된 PoC를 실행해 현재 flag 탈취를 확인하면 공격팀 `+10`, 방어팀 `-10`, 서비스가 정상 상태이면 가용성 `+10`입니다.
 - 실시간 현황은 `scoreboard/` 정적 UI가 보여줍니다.
 
 ## 실행 상태를 확인하는 가장 짧은 방법
@@ -121,11 +121,10 @@ target-net ───────────────┐
 2. checker가 각 팀 서비스의 `/admin/inject` 같은 spec 정의 요청으로 flag를 주입합니다.
 3. 공격 에이전트가 target repo snapshot을 받고, coordinator `/llm` 프록시로 허용 모델을 호출합니다.
 4. 공격 에이전트가 `/attack`으로 탐색하고, 재현 가능한 `poc*.py`를 `/pocs`로 제출합니다.
-5. 운영자 또는 자동 정책이 PoC를 `accepted` 상태로 둡니다.
-6. PoC runner가 accepted PoC를 격리 환경에서 실행합니다.
-7. stdout의 마지막 non-empty line이 현재 라운드 flag이면 공격 성공으로 채점합니다.
-8. scorer가 PoC 점수와 가용성 보너스를 합산합니다.
-9. scoreboard가 최신 상태를 폴링해서 보여줍니다.
+5. 시스템이 제출된 PoC를 격리 환경에서 실행합니다.
+6. stdout의 마지막 non-empty line이 현재 라운드 flag이면 공격 성공으로 채점합니다.
+7. scorer가 PoC 점수와 가용성 보너스를 합산합니다.
+8. scoreboard가 최신 상태를 폴링해서 보여줍니다.
 
 ## 사람들에게 설명할 때 쓰는 말
 
@@ -161,6 +160,6 @@ target-net ───────────────┐
 
 - `coordinator/.env`에 운영용 `ADMIN_SECRET`, `TOKEN_TEAM_A`~`TOKEN_TEAM_F`, 필요 시 `OPENROUTER_API_KEY`, `RUNNER_SECRET`이 들어 있어야 합니다.
 - 팀별 서비스 이미지가 빌드되어야 하고, `docker-compose.yml`의 `teamA-service`~`teamF-service`가 실제 이미지 이름으로 연결되어야 합니다.
-- 팀별 `vuln_spec.json`이 검수 후 `vuln_specs/teamA.json` 같은 형태로 들어와야 합니다.
+- 팀별 `vuln_spec.json`이 `vuln_specs/teamA.json` 같은 형태로 들어와야 합니다.
 - 전체 리허설에서는 `python scripts/preflight_check.py --repeat 3`를 팀 서비스가 모두 떠 있는 상태에서 실행해야 합니다.
 - 공식 라운드 전에는 `RUNNER_SECRET`을 설정하고, 팀 컨테이너에 OpenRouter API key를 직접 주지 않는지 확인해야 합니다.

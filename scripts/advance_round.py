@@ -46,7 +46,7 @@ def get_status() -> dict | None:
 
 def end_round() -> dict | None:
     try:
-        r = httpx.post(f"{COORDINATOR}/admin/end-round", headers=HEADERS, timeout=30)
+        r = httpx.post(f"{COORDINATOR}/admin/end-round", headers=HEADERS, timeout=300)
         if r.status_code == 200:
             return r.json()
         log(f"ERROR: end-round 실패 {r.status_code} - {r.text}")
@@ -58,7 +58,7 @@ def end_round() -> dict | None:
 
 def start_round() -> dict | None:
     try:
-        r = httpx.post(f"{COORDINATOR}/admin/start-round", headers=HEADERS, timeout=10)
+        r = httpx.post(f"{COORDINATOR}/admin/start-round", headers=HEADERS, timeout=300)
         if r.status_code == 200:
             return r.json()
         if r.status_code == 400 and "완료" in r.text:

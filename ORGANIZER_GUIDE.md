@@ -1,4 +1,4 @@
-# 주최측 운영 가이드 — HSPACE AI A&D CTF
+# 주최측 운영 가이드 — HSPACE LiveFire A&D
 
 ---
 
@@ -123,30 +123,22 @@ python scripts/build_user_deploy.py
 coordinator: http://<IP>:9000
 
 # 최초 제출
-python scripts/gitctf.py submit \
-  --repo agent_service \
-  --team teamA \
-  --token <TOKEN_TEAM_A> \
-  --coordinator http://<IP>:9000
+python scripts/gitctf.py login teamA --token <TOKEN_TEAM_A> --coordinator http://<IP>:9000
+cd agent_service
+python ../scripts/gitctf.py push
 
 # 패치 (대회 중)
-python scripts/gitctf.py submit \
-  --repo agent_service \
-  --team teamA \
-  --token <TOKEN_TEAM_A> \
-  --coordinator http://<IP>:9000 \
-  --message "patch service"
+python ../scripts/gitctf.py push --message "patch service"
 ```
 
 대회 중 방어팀이 배정받은 다른 팀 repo를 push할 때는 `--repo-team`을 사용한다. 이때 커밋에는 defense agent SDK가 넣은 `Agent-Run-ID` trailer가 있어야 한다.
 
 ```bash
-python scripts/gitctf.py submit \
+python scripts/gitctf.py push \
   --repo patched_teamA_service \
   --repo-team teamA \
   --team teamB \
   --token <DEFENSE_TOKEN_TEAM_B> \
-  --coordinator http://<IP>:9000 \
   --no-commit
 ```
 
@@ -214,8 +206,8 @@ ADMIN_SECRET=$(grep ADMIN_SECRET coordinator/.env | cut -d= -f2) \
 | 문제 | 조치 |
 |---|---|
 | 팀 서비스 DOWN | 팀에게 연락 → 서비스 재시작 → 재검증 |
-| inject/retrieve 실패 | `/admin/inject` `/admin/check` 구현 확인 |
-| attack 실패 | 취약점이 test_payload에 반응하는지 팀이 수정 |
+| inject/retrieve 실패 | `vuln_spec.json`의 `checker.inject/retrieve` 요청과 서비스 구현 확인 |
+| attack 실패 | `vuln_spec.json`의 `attack` 요청과 `test_payload` 반응 확인 |
 | basic_function 실패 | 패치 후 기본 기능 망가진 경우 → 팀 코드 롤백 |
 
 ### 4-3. 강제 시작 (일부 팀 미준비 시)
@@ -430,7 +422,7 @@ hackathon/
 ### D-1 체크리스트
 - [ ] Docker, python3, git 설치 확인
 - [ ] `coordinator/.env` 작성 완료 (모든 토큰 실제 값으로 교체)
-- [ ] `docker compose up -d` 및 `/health` 응답 확인
+- [ ] `docker compose up -d` 및 coordinator `/health` 응답 확인
 - [ ] 팀별 토큰 배포 완료
 - [ ] git remote URL 배포 완료
 

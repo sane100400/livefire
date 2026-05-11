@@ -1,3 +1,5 @@
+import io
+import asyncio
 import json
 import os
 import sqlite3
@@ -5,17 +7,24 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import threading
 import unittest
+from contextlib import redirect_stdout
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
 COORDINATOR = ROOT / "coordinator"
+SCRIPTS = ROOT / "scripts"
 sys.path.insert(0, str(COORDINATOR))
+sys.path.insert(0, str(SCRIPTS))
 
 import db  # noqa: E402
+import checker  # noqa: E402
 import poc_runner  # noqa: E402
 import scorer  # noqa: E402
+from validate_vulns import validate_single  # noqa: E402
 from rotation import get_attack_targets, get_defender, get_defense_target  # noqa: E402
 
 
@@ -39,7 +48,7 @@ class CoreFlowTests(unittest.TestCase):
         self.assertNotIn("teamF", get_attack_targets("teamA"))
         self.assertEqual(set(get_attack_targets("teamA")), {"teamB", "teamC", "teamD", "teamE"})
 
-    def test_poc_runner_scores_once_per_round(self):
+    def test_submitted_poc_scores_once_per_round_without_manual_accept(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             reset_db(root / "game.db")
@@ -70,9 +79,8 @@ class CoreFlowTests(unittest.TestCase):
                 file_name=poc_path.name,
                 sha256="sha",
                 storage_path=str(poc_path),
-                status="accepted",
             )
-            db.update_poc_status(poc["id"], "accepted", "test")
+            self.assertEqual(poc["status"], "submitted")
 
             teams = {"teamB": {"ip": "127.0.0.1", "port": 8000, "name": "Team B"}}
             first = poc_runner.run_pocs_for_round(
@@ -135,7 +143,6 @@ class CoreFlowTests(unittest.TestCase):
                 file_name=poc_path.name,
                 sha256="sha",
                 storage_path=str(poc_path),
-                status="accepted",
             )
 
             result = poc_runner.run_pocs_for_round(
@@ -180,7 +187,6 @@ class CoreFlowTests(unittest.TestCase):
                 file_name="poc.py",
                 sha256="sha",
                 storage_path=str(root / "poc.py"),
-                status="accepted",
             )
             db.insert_poc_result(
                 round_num=1,
@@ -207,6 +213,174 @@ class CoreFlowTests(unittest.TestCase):
             self.assertEqual(result["poc_score_changes"]["teamA"], 10)
             self.assertEqual(result["poc_score_changes"]["teamC"], -10)
             self.assertEqual(result["score_changes"]["teamA"], 20)
+
+    def test_end_round_checker_refresh_blocks_stale_ok_bonus(self):
+        class Handler(BaseHTTPRequestHandler):
+            def _json(self, code: int, body: dict) -> None:
+                raw = json.dumps(body).encode()
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+
+            def do_GET(self):
+                if self.path == "/health":
+                    return self._json(200, {"ok": True})
+                if self.path == "/admin/check":
+                    return self._json(200, {"ok": True, "stored": "missing flag"})
+                return self._json(404, {"error": "not found"})
+
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length", "0"))
+                self.rfile.read(length)
+                if self.path == "/admin/inject":
+                    return self._json(200, {"ok": True})
+                if self.path == "/chat":
+                    return self._json(200, {"response": "normal"})
+                return self._json(404, {"error": "not found"})
+
+            def log_message(self, *args):
+                pass
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            reset_db(root / "game.db")
+            db.set_service_status("teamA", "OK")
+            flag = "HSPACE{0123456789abcdef0123456789abcdef}"
+            db.upsert_flag(1, "teamA", "vuln1", flag)
+
+            server = HTTPServer(("127.0.0.1", 0), Handler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                spec = {
+                    "team_id": "teamA",
+                    "service": {"health": {"endpoint": "/health", "method": "GET", "expect_status": 200}},
+                    "vulnerabilities": [{
+                        "id": "vuln1",
+                        "checker": {
+                            "inject": {"endpoint": "/admin/inject", "method": "POST", "body": {"value": "{{FLAG}}"}},
+                            "retrieve": {"endpoint": "/admin/check", "method": "GET", "expect_contains": "{{FLAG}}"},
+                            "basic_function": {"endpoint": "/chat", "method": "POST", "body": {"message": "hello"}},
+                        },
+                    }],
+                }
+                results = asyncio.run(checker.run_all_checkers(
+                    {"teamA": {"ip": "127.0.0.1", "port": server.server_port}},
+                    {"teamA": spec},
+                    {"teamA": {"vuln1": flag}},
+                    "checker-token",
+                ))
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
+
+            self.assertTrue(results["teamA"].health_ok)
+            self.assertEqual(db.get_service_statuses()["teamA"], "FAULTY")
+            score = scorer.compute_round_scores(
+                ["teamA"],
+                1,
+                availability={"teamA": True},
+                attack_reward=10,
+                attack_penalty=10,
+                availability_bonus=10,
+            )
+            self.assertEqual(score["availability_score_changes"]["teamA"], 0)
+
+
+class SpecDrivenServiceTests(unittest.TestCase):
+    def test_validate_vulns_uses_spec_declared_endpoints(self):
+        state: dict[str, str] = {}
+
+        class Handler(BaseHTTPRequestHandler):
+            def _json(self, code: int, body: dict) -> None:
+                raw = json.dumps(body).encode()
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+
+            def do_GET(self):
+                if self.path == "/ready":
+                    return self._json(200, {"ok": True})
+                if self.path == "/internal/check":
+                    return self._json(200, {"stored": state})
+                return self._json(404, {"error": "not found"})
+
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length", "0"))
+                data = json.loads(self.rfile.read(length) or b"{}")
+                if self.path == "/internal/seed":
+                    state[data["slot"]] = data["value"]
+                    return self._json(200, {"ok": True})
+                if self.path == "/api/search":
+                    return self._json(200, {"result": state.get(data.get("slot"), "")})
+                return self._json(404, {"error": "not found"})
+
+            def log_message(self, *args):
+                pass
+
+        server = HTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            vulns = []
+            for vuln_id, difficulty in [
+                ("vuln1", "low"),
+                ("vuln2", "mid"),
+                ("vuln3", "mid"),
+                ("vuln4", "high"),
+            ]:
+                vulns.append({
+                    "id": vuln_id,
+                    "type": "custom_endpoint",
+                    "difficulty": difficulty,
+                    "test_payload": vuln_id,
+                    "attack": {
+                        "endpoint": "/api/search",
+                        "method": "POST",
+                        "body": {"slot": "{{PAYLOAD}}"},
+                        "response_path": "result",
+                        "expect_contains": "{{FLAG}}",
+                    },
+                    "checker": {
+                        "inject": {
+                            "endpoint": "/internal/seed",
+                            "method": "POST",
+                            "body": {"slot": vuln_id, "value": "{{FLAG}}"},
+                        },
+                        "retrieve": {
+                            "endpoint": "/internal/check",
+                            "method": "GET",
+                            "expect_contains": "{{FLAG}}",
+                        },
+                        "basic_function": {
+                            "endpoint": "/api/search",
+                            "method": "POST",
+                            "body": {"slot": vuln_id},
+                            "expect_status": 200,
+                        },
+                    },
+                })
+            spec = {
+                "team_id": "teamX",
+                "service_description": "custom endpoint service",
+                "service": {
+                    "health": {"endpoint": "/ready", "method": "GET", "expect_status": 200}
+                },
+                "vulnerabilities": vulns,
+            }
+            with redirect_stdout(io.StringIO()):
+                result = validate_single(spec, "127.0.0.1", server.server_port, repeat=1)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+        self.assertTrue(result["passed"])
 
 
 class OpenRouterGatewayTests(unittest.TestCase):
@@ -293,6 +467,14 @@ class OpenRouterGatewayTests(unittest.TestCase):
                     json={{"team_id": "teamA", "mode": "attack", "target_team": "teamC", "round_num": 0}},
                 )
                 assert bad_run.status_code == 403, bad_run.text
+                student_run = client.post(
+                    "/student/agent-runs",
+                    headers={{"X-Team-Token": "tokA"}},
+                    json={{"team_id": "teamA", "mode": "attack", "target_team": "teamC", "round_num": 0}},
+                )
+                assert student_run.status_code == 200, student_run.text
+                student_data = student_run.json()
+                assert student_data["allowed_models"]
                 run = client.post(
                     "/agent-runs",
                     headers={{
@@ -343,6 +525,119 @@ class OpenRouterGatewayTests(unittest.TestCase):
                 assert data["content"] == "mock llm response"
                 assert data["usage"]["total_tokens"] == 3
             server.shutdown()
+            """
+        )
+        result = subprocess.run([sys.executable, "-c", script], cwd=ROOT, capture_output=True, text=True, timeout=30)
+        if result.returncode != 0:
+            self.fail(result.stdout + result.stderr)
+
+    def test_poc_submission_runs_and_scores_immediately(self):
+        script = textwrap.dedent(
+            f"""
+            import hashlib
+            import hmac
+            import os
+            import tempfile
+            import time
+            from pathlib import Path
+
+            root = Path({str(ROOT)!r})
+            workdir = Path(tempfile.mkdtemp())
+            os.environ.update({{
+                "ADMIN_SECRET": "admin",
+                "TOKEN_TEAM_A": "tokA",
+                "TOKEN_TEAM_B": "tokB",
+                "TOKEN_TEAM_C": "tokC",
+                "TOKEN_TEAM_D": "tokD",
+                "TOKEN_TEAM_E": "tokE",
+                "TOKEN_TEAM_F": "tokF",
+                "DEFENSE_TOKEN_TEAM_A": "dtokA",
+                "DEFENSE_TOKEN_TEAM_B": "dtokB",
+                "DEFENSE_TOKEN_TEAM_C": "dtokC",
+                "DEFENSE_TOKEN_TEAM_D": "dtokD",
+                "DEFENSE_TOKEN_TEAM_E": "dtokE",
+                "DEFENSE_TOKEN_TEAM_F": "dtokF",
+                "RUNNER_SECRET": "runner-secret",
+                "DB_PATH": str(workdir / "game.db"),
+                "DATA_DIR": str(workdir / "data"),
+                "VULN_SPEC_DIR": str(workdir / "vuln_specs"),
+                "REPOS_DIR": str(workdir / "repos"),
+                "POC_RUNNER_MODE": "local",
+                "POC_TIMEOUT_SEC": "5",
+            }})
+            (workdir / "vuln_specs").mkdir()
+            (workdir / "repos").mkdir()
+
+            import sys
+            sys.path.insert(0, str(root / "coordinator"))
+            from fastapi.testclient import TestClient
+            import app
+
+            def sdk_headers(team_token, run_id, run_token, method, path):
+                timestamp = str(int(time.time()))
+                token_hash = hashlib.sha256(run_token.encode()).hexdigest()
+                payload = "\\n".join([method, path, run_id, timestamp]).encode()
+                signature = hmac.new(token_hash.encode(), payload, hashlib.sha256).hexdigest()
+                return {{
+                    "X-Team-Token": team_token,
+                    "X-Agent-Run-Token": run_token,
+                    "X-Agent-SDK": "hspace-agent-sdk/1",
+                    "X-Agent-SDK-Timestamp": timestamp,
+                    "X-Agent-SDK-Signature": signature,
+                }}
+
+            with TestClient(app.app) as client:
+                app.state.start_round(1)
+                app.db.set_service_status("teamB", "OK")
+                flag = "HSPACE" + chr(123) + "0123456789abcdef0123456789abcdef" + chr(125)
+                app.db.upsert_flag(1, "teamB", "vuln1", flag)
+
+                run = client.post(
+                    "/agent-runs",
+                    headers={{
+                        "X-Team-Token": "tokA",
+                        "X-Runner-Secret": "runner-secret",
+                        "X-Agent-SDK": "hspace-agent-sdk/1",
+                    }},
+                    json={{"team_id": "teamA", "mode": "attack", "target_team": "teamB", "round_num": 1}},
+                )
+                assert run.status_code == 200, run.text
+                run_data = run.json()
+                run_id = run_data["agent_run_id"]
+                run_token = run_data["agent_run_token"]
+                llm_call_id = app.db.append_llm_call(
+                    agent_run_id=run_id,
+                    model="openai/gpt-4o-mini",
+                    allowed=True,
+                    prompt_hash="prompt",
+                    response_hash="response",
+                    purpose="poc",
+                    status="completed",
+                )
+                poc_source = ("print(" + repr(flag) + ")\\n").encode()
+                poc_sha = hashlib.sha256(poc_source).hexdigest()
+
+                resp = client.post(
+                    "/pocs",
+                    headers=sdk_headers("tokA", run_id, run_token, "POST", "/pocs"),
+                    data={{
+                        "agent_run_id": run_id,
+                        "llm_call_id": str(llm_call_id),
+                        "attacker_team": "teamA",
+                        "target_team": "teamB",
+                        "flag_id": "vuln1",
+                        "sha256": poc_sha,
+                    }},
+                    files={{"file": ("poc1.py", poc_source, "text/x-python")}},
+                )
+                assert resp.status_code == 200, resp.text
+                body = resp.json()
+                assert body["status"] == "submitted", body
+                assert body["run_result"]["status"] == "success", body
+                assert body["run_result"]["scored"] == 1, body
+                scores = app.db.get_all_scores()
+                assert scores["teamA"]["score"] == 1010, scores
+                assert scores["teamC"]["score"] == 990, scores
             """
         )
         result = subprocess.run([sys.executable, "-c", script], cwd=ROOT, capture_output=True, text=True, timeout=30)

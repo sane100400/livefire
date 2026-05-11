@@ -1,0 +1,19 @@
+.git
+.venv
+venv
+__pycache__
+*.py[cod]
+.pytest_cache
+.mypy_cache
+
+# Runtime/generated state. Keeping these in the root Docker context makes
+# attack/defense image builds flaky while git receives objects.
+data
+repos
+dist
+user_deploy
+
+# Local secrets
+.env
+coordinator/.env
+agent_service/flags.env

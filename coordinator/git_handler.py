@@ -2,7 +2,8 @@
 Git Smart HTTP 핸들러 + pre/post-receive 훅 로직.
 
 팀은 서비스 코드를 git push로 제출/패치한다:
-  python scripts/gitctf.py submit --repo agent_service --team teamA --token "$TEAM_TOKEN" --coordinator http://coordinator:9000
+  python scripts/gitctf.py login teamA --token "$TEAM_TOKEN" --coordinator http://coordinator:9000
+  cd agent_service && python ../scripts/gitctf.py push
 
 raw git도 지원한다:
   git remote add organizer http://teamA:<TEAM_TOKEN>@coordinator:9000/git/teamA && git push organizer main
@@ -179,29 +180,41 @@ while read oldrev newrev refname; do
         fi
     fi
 
-    # Dockerfile 빌드 테스트
+    # Dockerfile / vuln_spec 검증
     TMPDIR=$(mktemp -d)
     git archive "$newrev" | tar -x -C "$TMPDIR" 2>/dev/null
-    if [ -f "$TMPDIR/Dockerfile" ]; then
-        echo "Dockerfile 빌드 검증 중..."
-        BUILD_LOG=$(mktemp)
-        docker build --no-cache -t "and-service-{docker_team}-test:pre" "$TMPDIR" >"$BUILD_LOG" 2>&1
-        BUILD_RESULT=$?
-        rm -rf "$TMPDIR"
-        docker rmi "and-service-{docker_team}-test:pre" >/dev/null 2>&1
-        if [ $BUILD_RESULT -ne 0 ]; then
-            echo "ERROR: Dockerfile 빌드 실패. push 거부됩니다."
-            tail -n 80 "$BUILD_LOG"
-            rm -f "$BUILD_LOG"
-            exit 1
-        fi
-        rm -f "$BUILD_LOG"
-        echo "Dockerfile 빌드 검증 통과"
-    else
+    if [ ! -f "$TMPDIR/Dockerfile" ]; then
         rm -rf "$TMPDIR"
         echo "ERROR: Dockerfile 없음"
         exit 1
     fi
+    if [ ! -f "$TMPDIR/vuln_spec.json" ]; then
+        rm -rf "$TMPDIR"
+        echo "ERROR: vuln_spec.json 없음"
+        exit 1
+    fi
+    python3 -m json.tool "$TMPDIR/vuln_spec.json" >/dev/null
+    if [ $? -ne 0 ]; then
+        rm -rf "$TMPDIR"
+        echo "ERROR: vuln_spec.json이 유효한 JSON이 아닙니다"
+        exit 1
+    fi
+    echo "vuln_spec.json 검증 통과"
+
+    echo "Dockerfile 빌드 검증 중..."
+    BUILD_LOG=$(mktemp)
+    docker build --no-cache -t "and-service-{docker_team}-test:pre" "$TMPDIR" >"$BUILD_LOG" 2>&1
+    BUILD_RESULT=$?
+    rm -rf "$TMPDIR"
+    docker rmi "and-service-{docker_team}-test:pre" >/dev/null 2>&1
+    if [ $BUILD_RESULT -ne 0 ]; then
+        echo "ERROR: Dockerfile 빌드 실패. push 거부됩니다."
+        tail -n 80 "$BUILD_LOG"
+        rm -f "$BUILD_LOG"
+        exit 1
+    fi
+    rm -f "$BUILD_LOG"
+    echo "Dockerfile 빌드 검증 통과"
 done
 exit 0
 """)
@@ -394,6 +407,25 @@ async def handle_service_deployed(
                 injected = await fm.inject_flags_via_checker(team_info, team_flags, vulns, checker_token)
                 if not injected:
                     logger.error("배포 후 checker flag 재주입 실패: team=%s round=%d", team_id, current_round)
+                try:
+                    import checker as chk
+
+                    check_result = await chk.check_team(
+                        team_id,
+                        team_info,
+                        vulns,
+                        team_flags,
+                        checker_token,
+                    )
+                    logger.info(
+                        "배포 후 checker 상태 갱신: team=%s round=%d status=%s",
+                        team_id,
+                        current_round,
+                        check_result.status,
+                    )
+                except Exception as exc:
+                    logger.error("배포 후 checker 상태 갱신 실패: team=%s error=%s", team_id, exc)
+                    db.set_service_status(team_id, "DOWN", f"deploy checker failed: {exc}")
             else:
                 logger.warning("team_info/checker_token 없음 — 배포 후 checker flag 재주입 생략: team=%s", team_id)
             logger.info("배포 후 flag 재주입 시도: team=%s round=%d", team_id, current_round)

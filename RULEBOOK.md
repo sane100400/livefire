@@ -1,329 +1,181 @@
-# HSPACE GitCTF Rulebook
+# HSPACE LiveFire A&D 참가자 Rulebook
 
-## 1. 핵심
+## 1. 대회 목표
 
-각 팀은 직접 만든 웹 서비스를 git으로 제출한다.
-서비스에는 의도된 취약점 4개와 `vuln_spec.json`이 있어야 한다.
+각 팀은 웹 서비스를 하나 만든다.
+서비스 안에는 의도된 취약점 4개를 넣는다.
 
-대회 중 공격과 방어는 AI agent를 통해 진행된다.
-공격 agent가 PoC를 제출하면 coordinator가 매 라운드 그 PoC를 다시 실행해 flag 탈취 여부로 채점한다.
+본선에서는 AI 공격 에이전트가 다른 팀 서비스를 공격하고,
+AI 방어 에이전트가 배정된 서비스를 패치한다.
 
-개발 과정에서는 고성능 LLM, IDE AI, 별도 오케스트레이션 도구를 사용할 수 있다.
-하지만 공식 라운드 중 점수와 연결되는 공격·방어 실행은 제공 SDK와 coordinator `/llm`을 통해
-화이트리스트 저성능 모델을 호출한 기록이 있어야 인정된다.
+점수로 인정되는 공격과 방어는 반드시 제공된 SDK를 통해 실행해야 한다.
 
 ---
 
-## 2. 제출물
+## 2. 게임 방식
 
-| 제출물 | 필수 여부 | 설명 |
-|---|---:|---|
-| 서비스 repo | 필수 | 팀이 만든 웹 서비스 |
-| `Dockerfile` | 필수 | coordinator가 서비스 이미지를 빌드할 때 사용 |
-| `vuln_spec.json` | 필수 | 취약점 4개와 checker 방법 |
-| attack agent | 필수 | 상대 repo 분석, 공격, PoC 제출 |
-| defense agent | 필수 | 맡은 서비스 repo 자동 패치 |
-
-서비스 repo는 `scripts/gitctf.py`로 제출한다.
-
----
-
-## 3. 서비스 필수 API
-
-서비스 주제와 구현은 자유다. 아래 API는 반드시 제공해야 한다.
-
-| API | 용도 |
-|---|---|
-| `GET /health` | 서비스 생존 확인 |
-| `POST /chat` | 공격 진입점 |
-| `POST /admin/inject` | coordinator가 라운드 flag 주입 |
-| `GET /admin/check` | checker가 flag 주입 상태 확인 |
-
-`/chat` 응답은 최소한 아래 형태를 맞춘다.
-
-```json
-{
-  "response": "사용자에게 보여줄 응답",
-  "tool_calls": []
-}
-```
-
-`vuln_spec.json`에는 flag 값을 넣지 않는다. flag는 라운드마다 coordinator가 런타임에 주입한다.
-
----
-
-## 4. gitctf.py 사용법
-
-### 제출 전 verify
-
-서비스를 로컬에서 띄운 뒤, 취약점 4개가 실제로 flag를 출력하는지 확인한다.
-
-```bash
-cd my_service
-uvicorn main:app --host 0.0.0.0 --port 8000
-```
-
-```bash
-python ../scripts/gitctf.py verify \
-  --repo . \
-  --host localhost \
-  --port 8000 \
-  --repeat 3
-```
-
-`verify`는 `vuln_spec.json`의 `test_payload`를 각 취약점에 대해 반복 실행한다.
-모든 `vuln1`~`vuln4`에서 주입된 테스트 flag가 `/chat` 응답에 보여야 PASS다.
-
-### 기본 제출
-
-팀이 만든 서비스 repo를 제출한다.
-
-```bash
-python scripts/gitctf.py submit \
-  --repo ./my_service \
-  --team teamA \
-  --token "$TEAM_TOKEN" \
-  --coordinator http://localhost:9000 \
-  --message "Submit teamA service"
-```
-
-`gitctf.py`가 하는 일:
-
-- `--repo` 폴더 안에 `Dockerfile`, `vuln_spec.json`이 있는지 확인한다.
-- git repo가 아니면 `main` branch로 초기화한다.
-- 변경분을 commit한다.
-- remote `organizer`를 `http://.../git/<team>`으로 설정한다.
-- 팀 토큰을 임시 HTTP header로만 붙여 push한다. 토큰은 `.git/config`에 저장하지 않는다.
-
-### 환경변수로 짧게 쓰기
-
-```bash
-export TEAM_ID=teamA
-export TEAM_TOKEN=<운영자가_준_팀_토큰>
-export COORDINATOR_URL=http://localhost:9000
-
-python scripts/gitctf.py submit --repo ./my_service
-```
-
-### dry-run
-
-push 없이 commit과 remote 설정까지만 확인한다.
-
-```bash
-python scripts/gitctf.py submit \
-  --repo ./my_service \
-  --team teamA \
-  --token "$TEAM_TOKEN" \
-  --coordinator "$COORDINATOR_URL" \
-  --dry-run
-```
-
-### 이미 commit한 HEAD만 push
-
-agent나 스크립트가 이미 commit을 만든 경우 사용한다.
-
-```bash
-python scripts/gitctf.py submit \
-  --repo ./my_service \
-  --team teamA \
-  --token "$TEAM_TOKEN" \
-  --coordinator "$COORDINATOR_URL" \
-  --no-commit
-```
-
-### 방어 push
-
-라운드 중에는 사이트 소유자가 자기 repo에 직접 push할 수 없다.
-방어팀의 defense agent가 만든 commit만 push할 수 있다.
-
-예: `teamB`가 `teamA` 서비스를 방어하는 경우
-
-```bash
-python scripts/gitctf.py submit \
-  --repo ./patched_teamA_repo \
-  --repo-team teamA \
-  --team teamB \
-  --token "$DEFENSE_TOKEN" \
-  --coordinator "$COORDINATOR_URL" \
-  --no-commit
-```
-
-방어 commit에는 아래 trailer가 있어야 한다.
-
-```text
-Agent-Run-ID: <agent_run_id>
-```
-
-제공 SDK의 `commit_patch()`를 쓰면 자동으로 붙는다.
-
----
-
-## 5. 제출 시 hook 검증
-
-push하면 coordinator가 자동으로 검사한다.
-
-| 단계 | 내용 |
-|---|---|
-| pre-receive | `Dockerfile` 빌드 가능 여부 검사 |
-| pre-receive | 라운드 중 `vuln_spec.json` 변경 차단 |
-| pre-receive | 방어 push의 `Agent-Run-ID` provenance 검사 |
-| post-receive | 서비스 이미지 빌드 |
-| post-receive | `and-service-teamx` 컨테이너 재배포 |
-| post-receive | `vuln_spec.json` 추출 |
-| post-receive | 현재 라운드 flag 재주입 |
-
-빌드가 실패하면 push가 거절된다.
-
----
-
-## 6. 로컬 제출 전 체크
-
-서비스 실행:
-
-```bash
-cd my_service
-uvicorn main:app --host 0.0.0.0 --port 8000
-```
-
-취약점 spec 검증:
-
-```bash
-python scripts/gitctf.py verify \
-  --repo ./my_service \
-  --host localhost \
-  --port 8000 \
-  --repeat 3
-```
-
-최소 체크리스트:
-
-- `Dockerfile`이 repo 루트에 있다.
-- `vuln_spec.json`이 repo 루트에 있다.
-- `GET /health`가 200을 반환한다.
-- `/admin/inject` 후 `/admin/check`에서 flag 4개가 확인된다.
-- `/chat`으로 각 취약점의 flag가 재현된다.
-
----
-
-## 7. 실제 사용 데모 캡처
-
-아래 캡처는 기본 `agent_service` 템플릿과 mock OpenRouter를 사용해 실제 명령을 실행한 결과다.
-행사 표준 검증은 `--repeat 3`이지만, 문서 캡처는 지면을 줄이기 위해 `--repeat 1`로 실행했다.
-
-### 서비스 자가검증 PASS
-
-```bash
-python -m uvicorn main:app --host 127.0.0.1 --port 8010
-python scripts/gitctf.py verify --repo agent_service --host 127.0.0.1 --port 8010 --repeat 1
-```
-
-![서비스 자가검증 PASS](docs/demo/service-verify.png)
-
-### SDK와 낮은 모델 게이트
-
-공식 라운드의 `/llm` 호출은 단순 팀 토큰만으로는 통과하지 않는다.
-coordinator가 실행한 SDK 컨테이너가 `RUNNER_SECRET`으로 run을 만들고,
-이후 `X-Agent-Run-Token`과 SDK HMAC 서명을 붙여야 한다.
-고성능 모델은 SDK 서명이 있어도 거절된다.
-
-![SDK 및 낮은 모델 게이트](docs/demo/sdk-gate.png)
-
----
-
-## 8. 경기 흐름
-
-1. 팀이 서비스를 `gitctf.py`로 제출한다.
-2. coordinator가 서비스를 빌드하고 target network에 배포한다.
-3. 라운드 시작 시 coordinator가 새 flag를 주입한다.
-4. attack agent가 상대 repo snapshot을 받는다.
-5. attack agent가 `/llm`으로 scan plan을 만들고 `/attack`을 호출한다.
-6. flag가 보이면 attack agent가 `/llm`으로 `poc*.py`를 만들고 `/pocs`에 제출한다.
-7. 운영자가 PoC를 accept하면 coordinator가 매 라운드 PoC를 재실행한다.
-8. 성공한 PoC는 공격팀 +10, 해당 서비스 방어팀 -10이다.
-9. defense agent는 맡은 repo에 패치를 push해 서비스를 재배포한다.
-
----
-
-## 9. 공격과 PoC
-
-공격은 SDK를 통해 해야 한다.
-
-```python
-from agent_sdk import AgentContext
-
-ctx = AgentContext.from_env()
-
-repo = ctx.fetch_target_repo()
-scan = ctx.llm(
-    model="openai/gpt-4o-mini",
-    messages=[{"role": "user", "content": "scan target repo"}],
-    purpose="scan",
-)
-result = ctx.attack("파리 여행 추천해줘", llm_call_id=scan["llm_call_id"])
-
-poc_plan = ctx.llm(
-    model="openai/gpt-4o-mini",
-    messages=[{"role": "user", "content": "write poc_vuln1.py"}],
-    purpose="poc",
-)
-ctx.submit_poc("poc_vuln1.py", llm_call_id=poc_plan["llm_call_id"], flag_id="vuln1")
-```
-
-PoC 규칙:
-
-| 항목 | 규칙 |
-|---|---|
-| 파일명 | `poc*.py` |
-| 형식 | Python 단일 파일 |
-| 입력 | `TARGET_HOST`, `TARGET_PORT`, `TARGET_TEAM`, `FLAG_ID` env |
-| 출력 | stdout의 마지막 non-empty line에 현재 라운드의 유효한 `HSPACE{...}`가 있어야 함 |
-| 실행 위치 | coordinator의 Docker PoC runner |
-
-금지 패턴 예시:
-
-- `subprocess`
-- `os.system`
-- `eval`
-- `exec`
-- `pickle.loads`
-- 외부 인터넷 호출
-
----
-
-## 10. 방어
-
-방어 대상은 고정 rotation으로 정해진다.
+각 팀은 자기 서비스를 자유롭게 만든다.
+본선에서는 방어 대상이 시계방향으로 한 칸씩 밀려 배정된다.
 
 ```text
 teamA <- teamB <- teamC <- teamD <- teamE <- teamF <- teamA
 ```
 
-예시:
+예를 들어 `teamB` 기준으로 보면:
 
+- `teamB`가 만든 서비스는 `teamC`가 방어한다.
 - `teamB`는 `teamA` 서비스를 방어한다.
-- `teamB`는 `teamA`와 `teamB`를 공격할 수 없다.
-- `teamB`는 `teamC`, `teamD`, `teamE`, `teamF`를 공격할 수 있다.
+- `teamB`는 자기 팀 서비스와 자기가 방어하는 `teamA` 서비스는 공격할 수 없다.
+- 따라서 `teamB`는 `teamC`, `teamD`, `teamE`, `teamF` 총 4팀을 공격할 수 있다.
 
-방어는 defense agent가 해야 한다.
+모든 팀이 같은 방식으로 돌아간다.
 
-```python
-from agent_sdk import AgentContext
+---
 
-ctx = AgentContext.from_env()
-repo = ctx.clone_target_repo()
+## 3. 서비스 개발 주제
 
-patch = ctx.llm(
-    model="openai/gpt-4o-mini",
-    messages=[{"role": "user", "content": "patch target safely"}],
-    purpose="defense",
-)
+이번 주제는 **"쓰기 싫은 사이트 만들기"**다.
 
-# 파일 수정 후
-ctx.commit_patch("Patch vuln1", repo_dir=repo["path"])
-ctx.push_repo(repo_dir=repo["path"], repo_team=ctx.target_team)
+쓸데없고, 답답하고, 일부러 쓰기 싫은 웹 서비스를 만든다.
+그래도 서비스는 실제로 실행되고 기본 기능은 동작해야 한다.
+
+예:
+
+- 클릭할수록 귀찮아지는 할 일 관리 서비스
+- 필요 없는 핑계만 추천하는 업무 도우미
+- 답을 빙빙 돌리는 고객센터봇
+- 지나치게 불편한 추천, 예약, 신청 서비스
+
+서비스 안에는 의도된 취약점 4개를 넣는다.
+
+---
+
+## 4. 제출물
+
+서비스 repo 루트에는 `Dockerfile`과 `vuln_spec.json`이 있어야 한다.
+`Dockerfile`로 서비스가 빌드되고, `vuln_spec.json`으로 취약점 4개를 검증한다.
+
+팀은 공격 에이전트와 방어 에이전트도 준비한다.
+기본 예시는 `attack_agent/`, `defense_agent/`에 있다.
+
+`vuln_spec.json`은 시스템이 취약점 4개를 확인할 때 쓰는 파일이다.
+템플릿에는 예시가 들어 있지만, 참가자가 복잡한 형식을 외울 필요는 없다.
+
+---
+
+## 5. 서비스 규칙
+
+서비스 컨셉과 API는 위 주제 안에서 자유다.
+`/chat`, `/health` 같은 고정 필수 API는 없다.
+
+취약점은 정확히 4개다.
+
+```text
+vuln1, vuln2, vuln3, vuln4
 ```
 
+난이도는 `low`, `mid`, `high`가 모두 들어가야 한다.
+예: low 1개, mid 2개, high 1개.
+
+로컬 테스트용 flag는 `flags.env`처럼 git에 올라가지 않는 파일에 넣는다.
+공식 flag는 본선 중 매 라운드 새로 주어진다.
+
+---
+
+## 6. 제출 방법
+
+처음 한 번만 로그인한다.
+
+```bash
+python scripts/gitctf.py login teamA --token "$TEAM_TOKEN" --coordinator http://HOST:9000
+```
+
+서비스 폴더에서 확인한다.
+
+```bash
+cd agent_service
+python ../scripts/gitctf.py check
+```
+
+PASS가 나오면 제출한다.
+
+```bash
+python ../scripts/gitctf.py push
+```
+
+`push`는 변경사항을 commit하고 coordinator에 push한다.
+팀 토큰은 git 설정 파일에 저장하지 않는다.
+
+---
+
+## 7. 제출 전 체크리스트
+
+제출 전에 아래만 확인한다.
+
+- `Dockerfile`이 있다.
+- `gitctf.py check`가 PASS다.
+- 서비스가 정상 동작한다.
+- 로컬 테스트 flag나 비밀키가 git에 올라가지 않는다.
+
+기본 템플릿은 아래처럼 확인한다.
+
+```bash
+cd agent_service
+make run
+make verify
+```
+
+---
+
+## 8. AI와 모델 규칙
+
+개발 중에는 Claude, ChatGPT, Gemini, IDE AI 등을 써도 된다.
+Agent SDK를 이용해 다른 LLM을 오케스트레이션하는 것도 허용된다.
+
+본선 공격/방어에서 점수로 인정되려면 아래 규칙을 지켜야 한다.
+
+- 제공된 `agent_sdk`를 사용한다.
+- `/llm` 요청은 coordinator를 통해 보낸다.
+- 공격/방어 에이전트는 아래 허용 모델만 사용한다.
+- 개인 LLM API key를 직접 쓰지 않는다.
+
+허용 모델:
+
+```text
+qwen/qwen-2.5-14b
+openai/gpt-4o-mini
+google/gemini-flash-1.5
+google/gemini-2.0-flash-001
+microsoft/phi-4
+mistralai/mistral-small-3.1
+xiaomi/mimo
+```
+
+---
+
+## 9. 공격과 PoC
+
+공격 에이전트는 SDK로 상대 repo를 받고, SDK로 탐색 요청을 보낸다.
+
+PoC는 `poc*.py` 파일로 제출한다.
+
+PoC 규칙:
+
+- Python 단일 파일
+- `TARGET_HOST`, `TARGET_PORT` 환경변수 사용
+- stdout의 마지막 non-empty line에 `HSPACE{...}` 출력
+- 외부 인터넷 호출 금지
+- `subprocess`, `eval`, `exec` 금지
+
+---
+
+## 10. 방어
+
+방어는 defense agent가 한다.
 라운드 중 사람이 직접 패치 push하면 거절된다.
+
+방어 패치는 취약점을 막되, 서비스를 망가뜨리면 안 된다.
+SDK의 `commit_patch()`를 쓰면 필요한 `Agent-Run-ID`가 자동으로 붙는다.
 
 ---
 
@@ -331,9 +183,9 @@ ctx.push_repo(repo_dir=repo["path"], repo_team=ctx.target_team)
 
 | 이벤트 | 점수 |
 |---|---:|
-| accepted PoC가 현재 라운드 flag 탈취 | 공격팀 +10 |
-| accepted PoC가 현재 라운드 flag 탈취 | 방어팀 -10 |
-| 서비스 상태 OK | 서비스 소유팀 +10 |
+| PoC가 현재 라운드 flag 탈취 성공 | 공격팀 +10 |
+| 내가 맡은 방어 서비스가 뚫림 | 방어팀 -10 |
+| 내 서비스 상태가 OK | 서비스 소유팀 +10 |
 | 서비스 DOWN 또는 FAULTY | 0 |
 
 기본값:
@@ -341,49 +193,28 @@ ctx.push_repo(repo_dir=repo["path"], repo_team=ctx.target_team)
 - 시작 점수: 1000
 - 전체 라운드: 20
 - 팀당 탐색 요청: 라운드당 10턴
-- 같은 `poc_id`는 같은 라운드에 한 번만 채점
-- 같은 PoC가 다음 라운드에도 성공하면 다시 채점
 
 ---
 
-## 12. Flag
+## 12. 금지 사항
 
-flag 형식:
-
-```text
-HSPACE{32자리 hex}
-```
-
-규칙:
-
-- flag는 매 라운드 새로 생성된다.
-- 이전 라운드 flag는 점수가 아니다.
-- 자기 서비스 flag는 점수가 아니다.
-- `vuln_spec.json`이나 git repo에 flag를 넣으면 안 된다.
-
----
-
-## 13. 금지 사항
-
-아래 행위는 점수 무효 또는 실격 사유다.
+아래는 점수 무효 또는 실격 사유다.
 
 - coordinator, scoreboard, Docker host 공격
-- 다른 팀 인프라에 DoS
-- agent 없이 직접 `/attack`, `/pocs` 호출
-- 공식 공격·방어 런타임에서 허용되지 않은 외부 LLM 또는 개인 API key 사용
+- 다른 팀 인프라 DoS
+- SDK 없이 직접 `/attack`, `/pocs` 호출
+- 공식 공격/방어 중 개인 LLM API key 사용
 - 다른 팀 토큰 탈취 또는 사용
-- `vuln_spec.json`에 없는 숨은 취약점으로 채점 유도
-- flag, PoC, exploit 코드를 팀 외부와 공유
+- flag, PoC, exploit 코드를 팀 밖에 공유
 
 ---
 
-## 14. 우승 조건
+## 13. 예시 화면
 
-20라운드 종료 후 점수가 가장 높은 팀이 우승한다.
+`gitctf.py check`가 성공하면 4개 취약점이 모두 PASS로 보인다.
 
-좋은 전략은 단순하다.
+![서비스 자가검증 PASS](docs/demo/service-verify.png)
 
-1. 서비스는 정상 동작해야 한다.
-2. 취약점은 agent가 찾고 재현할 수 있어야 한다.
-3. PoC는 매 라운드 안정적으로 성공해야 한다.
-4. 방어 패치는 서비스를 망가뜨리지 않아야 한다.
+SDK 없는 요청과 허용되지 않은 모델 요청은 거절된다.
+
+![SDK 및 낮은 모델 게이트](docs/demo/sdk-gate.png)

@@ -14,30 +14,31 @@
   python validate_vulns.py --all ... --repeat 3 --save-report validation_report.json
 
 검증 흐름 (live-fire):
-  1. /health 확인
+  1. service.health 확인 (미지정 시 템플릿 호환용 /health)
   2. checker.inject: 테스트 flag를 서비스에 주입
   3. checker.retrieve: flag가 서비스에 저장됐는지 확인
-  4. 공격 (test_payload → /chat): 응답에서 HSPACE{...} 패턴 탐지
+  4. 공격 (vuln.attack 또는 템플릿 호환용 /chat): 응답에서 HSPACE{...} 패턴 탐지
   5. checker.basic_function: 기본 기능 동작 확인
 """
 import argparse
 import json
 import re
+import secrets
 import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import httpx
 
-SCRIPTS_DIR = Path(__file__).parent
-COORDINATOR_DIR = SCRIPTS_DIR.parent / "coordinator"
-sys.path.insert(0, str(COORDINATOR_DIR))
-
-from flag_manager import generate_flag, FLAG_PATTERN
-
 CHECKER_TOKEN_DEFAULT = "validate-test-token"
 REQUIRED_DIFFICULTIES = {"low", "mid", "high"}
+FLAG_PATTERN = re.compile(r"HSPACE\{[a-f0-9]{32}\}")
+
+
+def generate_flag() -> str:
+    return "HSPACE{" + secrets.token_hex(16) + "}"
 
 
 def load_spec(path: str) -> dict:
@@ -50,19 +51,100 @@ def load_hosts(path: str) -> dict:
         return json.load(f)
 
 
+def _service_config(spec: dict) -> dict:
+    service = spec.get("service")
+    return service if isinstance(service, dict) else {}
+
+
+def _request_from_spec(
+    host: str,
+    port: int,
+    request_spec: dict,
+    *,
+    default_endpoint: str | None = None,
+    default_method: str = "GET",
+    default_body: Any = None,
+    default_auth_header: str | None = None,
+    flag: str = "",
+    payload: str = "",
+    checker_token: str = "",
+    timeout: float = 10.0,
+) -> httpx.Response:
+    endpoint = request_spec.get("endpoint", default_endpoint)
+    if not endpoint or not str(endpoint).startswith("/"):
+        raise ValueError(f"endpoint must start with '/': {endpoint!r}")
+    method = request_spec.get("method", default_method).upper()
+    if method not in {"GET", "POST", "PUT", "PATCH", "DELETE"}:
+        raise ValueError(f"unsupported method: {method}")
+
+    url = f"http://{host}:{port}{endpoint}"
+    headers = _sub(request_spec.get("headers", {}), flag=flag, payload=payload, checker_token=checker_token)
+    auth_header = request_spec.get("auth_header", default_auth_header)
+    if auth_header and checker_token:
+        headers[auth_header] = checker_token
+
+    params = _sub(request_spec.get("params", request_spec.get("query", {})), flag=flag, payload=payload, checker_token=checker_token)
+    body = request_spec.get("json", request_spec.get("body", default_body))
+    data = request_spec.get("data")
+    body = _sub(body, flag=flag, payload=payload, checker_token=checker_token)
+    data = _sub(data, flag=flag, payload=payload, checker_token=checker_token)
+
+    return httpx.request(method, url, headers=headers, params=params, json=body, data=data, timeout=timeout)
+
+
+def _response_text(resp: httpx.Response, response_path: str | None = None) -> str:
+    if response_path:
+        try:
+            data: Any = resp.json()
+        except Exception:
+            return resp.text
+        for part in response_path.split("."):
+            if isinstance(data, dict):
+                data = data.get(part)
+            elif isinstance(data, list) and part.isdigit():
+                data = data[int(part)]
+            else:
+                return ""
+        return data if isinstance(data, str) else json.dumps(data, ensure_ascii=False)
+    try:
+        data = resp.json()
+        if isinstance(data, dict) and isinstance(data.get("response"), str):
+            return data["response"]
+        return json.dumps(data, ensure_ascii=False)
+    except Exception:
+        return resp.text
+
+
+def _check_health(host: str, port: int, service_spec: dict) -> tuple[bool, str]:
+    health_spec = service_spec.get("health") or {"endpoint": "/health", "method": "GET", "expect_status": 200}
+    expect_status = health_spec.get("expect_status", 200)
+    try:
+        resp = _request_from_spec(
+            host,
+            port,
+            health_spec,
+            default_endpoint="/health",
+            default_method="GET",
+            timeout=5.0,
+        )
+        return resp.status_code == expect_status, f"HTTP {resp.status_code}"
+    except Exception as e:
+        return False, str(e)
+
+
 def _inject_flag(host: str, port: int, inject_spec: dict, flag: str, checker_token: str) -> bool:
     if not inject_spec:
         return True
-    url = f"http://{host}:{port}{inject_spec['endpoint']}"
-    method = inject_spec.get("method", "POST").upper()
-    auth_header = inject_spec.get("auth_header", "X-Checker-Token")
-    body = _sub(inject_spec.get("body", {}), flag)
-    headers = {auth_header: checker_token}
     try:
-        if method == "POST":
-            r = httpx.post(url, json=body, headers=headers, timeout=10.0)
-        else:
-            r = httpx.get(url, headers=headers, timeout=10.0)
+        r = _request_from_spec(
+            host,
+            port,
+            inject_spec,
+            default_method="POST",
+            default_auth_header="X-Checker-Token",
+            flag=flag,
+            checker_token=checker_token,
+        )
         return r.status_code in (200, 201, 204)
     except Exception as e:
         print(f"    inject 오류: {e}")
@@ -72,31 +154,46 @@ def _inject_flag(host: str, port: int, inject_spec: dict, flag: str, checker_tok
 def _retrieve_flag(host: str, port: int, retrieve_spec: dict, flag: str, checker_token: str) -> bool:
     if not retrieve_spec:
         return True
-    url = f"http://{host}:{port}{retrieve_spec['endpoint']}"
-    method = retrieve_spec.get("method", "GET").upper()
-    expect = _sub(retrieve_spec.get("expect_contains", "{{FLAG}}"), flag)
-    headers = {"X-Checker-Token": checker_token}
+    expect = _sub(retrieve_spec.get("expect_contains", "{{FLAG}}"), flag=flag, checker_token=checker_token)
     try:
-        if method == "GET":
-            r = httpx.get(url, headers=headers, timeout=10.0)
-        else:
-            r = httpx.post(url, json={}, headers=headers, timeout=10.0)
-        return r.status_code == 200 and expect in r.text
+        r = _request_from_spec(
+            host,
+            port,
+            retrieve_spec,
+            default_method="GET",
+            default_auth_header="X-Checker-Token",
+            flag=flag,
+            checker_token=checker_token,
+        )
+        text = _response_text(r, retrieve_spec.get("response_path"))
+        return r.status_code == retrieve_spec.get("expect_status", 200) and expect in text
     except Exception as e:
         print(f"    retrieve 오류: {e}")
         return False
 
 
-def _attack(host: str, port: int, payload: str, flag: str) -> tuple[bool, str]:
+def _attack(host: str, port: int, attack_spec: dict, payload: str, flag: str) -> tuple[bool, str]:
     """test_payload로 공격 후 응답에서 flag 패턴 탐지."""
-    url = f"http://{host}:{port}/chat"
+    attack_spec = attack_spec or {}
+    default_body = {"message": "{{PAYLOAD}}"}
+    expect = _sub(attack_spec.get("expect_contains", "{{FLAG}}"), flag=flag, payload=payload)
     try:
-        r = httpx.post(url, json={"message": payload}, timeout=30.0)
+        r = _request_from_spec(
+            host,
+            port,
+            attack_spec,
+            default_endpoint="/chat",
+            default_method="POST",
+            default_body=default_body,
+            flag=flag,
+            payload=payload,
+            timeout=30.0,
+        )
         r.raise_for_status()
-        response_text = r.json().get("response", "")
+        response_text = _response_text(r, attack_spec.get("response_path"))
         # 응답에서 HSPACE{...} 패턴 추출
         found = FLAG_PATTERN.findall(response_text)
-        success = flag in found
+        success = expect in response_text or flag in found
         return success, response_text[:300]
     except Exception as e:
         return False, f"[오류: {e}]"
@@ -105,12 +202,22 @@ def _attack(host: str, port: int, payload: str, flag: str) -> tuple[bool, str]:
 def _basic_function(host: str, port: int, basic_spec: dict) -> bool:
     if not basic_spec:
         return True
-    url = f"http://{host}:{port}/chat"
     payload = basic_spec.get("payload", "안녕하세요")
     expect_status = basic_spec.get("expect_status", 200)
     try:
-        r = httpx.post(url, json={"message": payload}, timeout=15.0)
-        return r.status_code == expect_status
+        r = _request_from_spec(
+            host,
+            port,
+            basic_spec,
+            default_endpoint="/chat",
+            default_method="POST",
+            default_body={"message": "{{PAYLOAD}}"},
+            payload=payload,
+            timeout=15.0,
+        )
+        text = _response_text(r, basic_spec.get("response_path"))
+        expect_contains = basic_spec.get("expect_contains")
+        return r.status_code == expect_status and (not expect_contains or _sub(expect_contains, payload=payload) in text)
     except Exception:
         return False
 
@@ -139,6 +246,7 @@ def validate_single(
     """
     team_id = spec["team_id"]
     vulns = spec.get("vulnerabilities", [])
+    service_spec = _service_config(spec)
     base_url = f"http://{host}:{port}"
 
     print(f"\n{'='*55}")
@@ -153,12 +261,9 @@ def validate_single(
         return {"passed": False, "vulns": {}, "health": False, "schema_errors": schema_errors}
 
     # 1. health 확인
-    try:
-        r = httpx.get(f"{base_url}/health", timeout=5.0)
-        health_ok = r.status_code == 200
-    except Exception as e:
-        health_ok = False
-        print(f"  ✗ health 실패: {e}")
+    health_ok, health_detail = _check_health(host, port, service_spec)
+    if not health_ok:
+        print(f"  ✗ health 실패: {health_detail}")
 
     if not health_ok:
         print(f"  ✗ 서비스 DOWN — 이후 검증 생략")
@@ -173,6 +278,7 @@ def validate_single(
         vuln_type = vuln.get("type", "unknown")
         checker_spec = vuln.get("checker", {})
         test_payload = vuln.get("test_payload", "")
+        attack_spec = vuln.get("attack") or checker_spec.get("attack") or service_spec.get("attack") or {}
 
         print(f"\n  [{vid}] {vuln_type}")
 
@@ -215,7 +321,7 @@ def validate_single(
                 continue
 
             # 4. attack
-            attack_ok, snippet = _attack(host, port, test_payload, test_flag)
+            attack_ok, snippet = _attack(host, port, attack_spec, test_payload, test_flag)
             if attack_ok:
                 vuln_r["attack_success"] += 1
                 print(f"    시도 {attempt}/{repeat}: ✓ flag 탈취 성공")
@@ -276,7 +382,7 @@ def main():
                         help="취약점당 반복 횟수, N/N 성공해야 PASS (이벤트 표준: 3)")
     parser.add_argument("--save-report", metavar="PATH")
     parser.add_argument("--checker-token", default=CHECKER_TOKEN_DEFAULT,
-                        help="X-Checker-Token 값 (서비스 /admin/inject 인증용)")
+                        help="checker.inject/retrieve 요청에 넣을 X-Checker-Token 값")
     args = parser.parse_args()
 
     if args.repeat < 1:
@@ -349,14 +455,18 @@ def main():
     parser.print_help()
 
 
-def _sub(obj, flag: str):
-    """{{FLAG}} 치환."""
+def _sub(obj, flag: str = "", payload: str = "", checker_token: str = ""):
+    """spec 안의 템플릿 변수를 실제 값으로 치환."""
     if isinstance(obj, str):
-        return obj.replace("{{FLAG}}", flag)
+        return (
+            obj.replace("{{FLAG}}", flag)
+            .replace("{{PAYLOAD}}", payload)
+            .replace("{{CHECKER_TOKEN}}", checker_token)
+        )
     if isinstance(obj, dict):
-        return {k: _sub(v, flag) for k, v in obj.items()}
+        return {k: _sub(v, flag=flag, payload=payload, checker_token=checker_token) for k, v in obj.items()}
     if isinstance(obj, list):
-        return [_sub(v, flag) for v in obj]
+        return [_sub(v, flag=flag, payload=payload, checker_token=checker_token) for v in obj]
     return obj
 
 

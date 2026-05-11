@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DEST = ROOT / "user_deploy"
 
 COPY_PATHS = [
+    ".dockerignore",
     "RULEBOOK.md",
     "docs/demo",
     "agent_sdk",
@@ -36,15 +37,15 @@ EXCLUDE_DIRS = {
 EXCLUDE_SUFFIXES = {".pyc", ".pyo"}
 
 
-README = """# HSPACE Participant Package
+README = """# HSPACE LiveFire A&D Participant Package
 
-이 폴더는 참가자 배포용 파일만 모은 패키지입니다. coordinator, scoreboard, 운영자 문서, 시크릿 템플릿, 런타임 데이터는 포함하지 않습니다.
+이 폴더는 참가자 배포용 파일만 모은 패키지입니다. coordinator, scoreboard, 진행 문서, 시크릿 템플릿, 런타임 데이터는 포함하지 않습니다.
 
 ## 포함 파일
 
 | 경로 | 용도 |
 |---|---|
-| `agent_service/` | 팀 서비스 템플릿. `Dockerfile`, `main.py`, `vuln_spec.json` 포함 |
+| `agent_service/` | 팀 서비스 템플릿. `Dockerfile`, `main.py`, 서비스 검증용 `vuln_spec.json` 예시 포함 |
 | `attack_agent/` | 공격 에이전트 템플릿 |
 | `defense_agent/` | 방어 에이전트 템플릿 |
 | `agent_sdk/` | coordinator 연동 SDK |
@@ -55,6 +56,9 @@ README = """# HSPACE Participant Package
 
 ## 서비스 개발
 
+주제는 **"쓰기 싫은 사이트 만들기"**입니다. 쓸데없고 귀찮지만 실제로 실행되는 웹 서비스를 만들고, 의도된 취약점 4개를 심습니다.
+고정 필수 API는 없습니다. `vuln_spec.json`은 시스템이 취약점 4개를 확인할 때 쓰는 예시 검증 파일입니다.
+
 ```bash
 cd agent_service
 make run
@@ -64,11 +68,9 @@ make verify
 ## 서비스 제출
 
 ```bash
-python scripts/gitctf.py submit \\
-  --repo agent_service \\
-  --team teamA \\
-  --token "$TEAM_TOKEN" \\
-  --coordinator http://<COORDINATOR_IP>:9000
+python scripts/gitctf.py login teamA --token "$TEAM_TOKEN" --coordinator http://<COORDINATOR_IP>:9000
+cd agent_service
+python ../scripts/gitctf.py push
 ```
 
 ## 공격 에이전트 이미지
@@ -81,7 +83,7 @@ docker build -f attack_agent/Dockerfile -t and-attack-teama:latest .
 
 ## Agent SDK 최소 사용 예
 
-공식 라운드에서는 운영자가 실행한 컨테이너에 필요한 환경변수가 주입됩니다.
+공식 라운드에서는 실행 컨테이너에 필요한 환경변수가 주입됩니다.
 
 ```python
 from agent_sdk import AgentContext

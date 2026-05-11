@@ -1,9 +1,9 @@
 """
 PoC execution and scoring.
 
-Accepted Python PoCs run once per round. The production path executes them in
-a restricted Docker container attached only to target-net; local mode remains
-for unit tests and offline development.
+Submitted Python PoCs run once per round after static validation. The production
+path executes them in a restricted Docker container attached only to target-net;
+local mode remains for unit tests and offline development.
 """
 from __future__ import annotations
 
@@ -70,7 +70,7 @@ def run_pocs_for_round(
     results: list[dict] = []
     service_statuses = db.get_service_statuses()
 
-    for poc in db.get_accepted_pocs(only_poc_id):
+    for poc in db.get_runnable_pocs(only_poc_id):
         existing = db.get_poc_result(round_num, poc["id"])
         if existing:
             existing = dict(existing)

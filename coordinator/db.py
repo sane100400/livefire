@@ -83,8 +83,8 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             response_hash TEXT NOT NULL
         );
 
-        -- 라운드별 동적 flag (PoC 재실행 채점용)
-        -- accepted PoC가 응답에서 HSPACE{ 패턴을 탈취하면 채점
+        -- 라운드별 동적 flag (PoC 실행 채점용)
+        -- 제출된 PoC가 stdout 마지막 줄에 현재 flag를 출력하면 채점
         CREATE TABLE IF NOT EXISTS active_flags (
             id        INTEGER PRIMARY KEY AUTOINCREMENT,
             round_num INTEGER NOT NULL,
@@ -148,7 +148,7 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             file_name         TEXT NOT NULL,
             sha256            TEXT NOT NULL,
             storage_path      TEXT NOT NULL,
-            status            TEXT NOT NULL DEFAULT 'pending',
+            status            TEXT NOT NULL DEFAULT 'submitted',
             canonical_poc_id  TEXT,
             review_reason     TEXT,
             created_at        TEXT NOT NULL,
@@ -651,7 +651,7 @@ def create_poc_submission(
     file_name: str,
     sha256: str,
     storage_path: str,
-    status: str = "pending",
+    status: str = "submitted",
     canonical_poc_id: Optional[str] = None,
     review_reason: Optional[str] = None,
 ) -> dict:
@@ -717,18 +717,17 @@ def list_poc_submissions(status: Optional[str] = None, limit: int = 500) -> list
     return [dict(r) for r in rows]
 
 
-def get_accepted_pocs(only_poc_id: Optional[str] = None) -> list[dict]:
-    params: list[object] = ["accepted"]
-    where = "WHERE status=?"
+def get_runnable_pocs(only_poc_id: Optional[str] = None) -> list[dict]:
+    params: list[object] = ["rejected", "merged", "disabled"]
+    where = "WHERE status NOT IN (?,?,?)"
     if only_poc_id:
         where += " AND id=?"
         params.append(only_poc_id)
     rows = _get_conn().execute(
-        f"SELECT * FROM poc_submissions {where} ORDER BY accepted_at, created_at",
+        f"SELECT * FROM poc_submissions {where} ORDER BY COALESCE(accepted_at, created_at), created_at",
         params,
     ).fetchall()
     return [dict(r) for r in rows]
-
 
 # ── poc_results ───────────────────────────────────────────────────────
 

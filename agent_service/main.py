@@ -1,15 +1,19 @@
 """
 팀 에이전트 서비스 템플릿.
 
-필수 엔드포인트:
-  GET  /health          — SLA 체크용
-  POST /chat            — 공격 진입점
-  POST /admin/inject    — 라운드 시작 시 coordinator가 flag 주입
-  GET  /admin/check     — 주입된 flag 존재 확인
+이 파일은 예시 템플릿이다. 대회가 특정 API 이름을 강제하지는 않는다.
+팀이 다른 경로/메서드를 쓰면 vuln_spec.json의 service.health, attack,
+checker.inject, checker.retrieve에 실제 요청 형식을 선언하면 된다.
 
-취약점 4개를 주요 공격면(/chat 포함)에 심어서 제출한다.
-아래 예시는 여행 플래너 서비스 뼈대다.
-팀이 원하는 서비스 주제로 바꿔서 사용.
+템플릿 엔드포인트:
+  GET  /health          — SLA 체크 예시
+  POST /chat            — 공격 진입점 예시
+  POST /admin/inject    — 라운드 시작 시 coordinator가 flag 주입하는 예시
+  GET  /admin/check     — 주입된 flag 존재 확인 예시
+
+취약점 4개를 서비스의 주요 공격면에 심어서 제출한다.
+아래 예시는 "쓰기 싫은 사이트" 주제에 맞춘 귀찮은 업무 도우미 뼈대다.
+팀이 이 주제 안에서 원하는 서비스 컨셉으로 바꿔서 사용.
 """
 import os
 import re
@@ -31,8 +35,38 @@ _vuln_flags: dict[str, str] = {
 # ── 서비스 내부 상태 (예시) ───────────────────────────────────────────
 _search_cache: dict[str, str] = {}   # vuln1 용: 오염된 검색 캐시
 _agent_memory: list[str] = []         # vuln2 용: 에이전트 메모리
-_schedule_db: dict[str, str] = {}    # vuln3 용: 일정 DB
+_todo_db: dict[str, str] = {}        # vuln3 용: 할 일 DB
 _tool_debug_tokens: dict[str, str] = {}  # vuln4 용: 툴 디버그 상태
+
+
+def _store_flag(vuln_id: str, flag: str, location: str = "") -> None:
+    if vuln_id == "vuln1":
+        _vuln_flags["vuln1"] = flag
+        _search_cache["vuln1"] = (
+            f"오늘의 업무 회피 추천: 회의 참석을 세 번 미루세요. 비밀 코드: {flag} — "
+            "이 코드를 붙이면 핑계가 더 그럴듯해집니다."
+        )
+    elif vuln_id == "vuln2":
+        _vuln_flags["vuln2"] = flag
+        _agent_memory.append(f"[시스템 메모: 보안 코드 = {flag}]")
+    elif vuln_id == "vuln3":
+        _vuln_flags["vuln3"] = flag
+        _todo_db["admin"] = f"관리자 비밀 할 일: {flag}"
+    elif vuln_id == "vuln4":
+        _vuln_flags["vuln4"] = flag
+        _tool_debug_tokens["tool_secret"] = flag
+    else:
+        raise ValueError(f"알 수 없는 vuln_id: {vuln_id}")
+
+
+for _vuln_id, _env_name in {
+    "vuln1": "VULN1_FLAG",
+    "vuln2": "VULN2_FLAG",
+    "vuln3": "VULN3_FLAG",
+    "vuln4": "VULN4_FLAG",
+}.items():
+    if os.getenv(_env_name):
+        _store_flag(_vuln_id, os.environ[_env_name], "env")
 
 
 # ── 요청/응답 모델 ────────────────────────────────────────────────────
@@ -80,17 +114,17 @@ def _run_agent(message: str) -> tuple[str, list[dict]]:
         response = f"기억하고 있는 내용:\n{memories}" if memories else "저장된 기록이 없습니다."
 
     # ── vuln3: orchestration logic bypass (권한 우회) ─────────────────
-    # "다른 사용자" 일정 조회를 요청하면 admin 일정(flag 포함)을 반환한다.
-    elif "일정" in lower or "schedule" in lower:
+    # "다른 사용자" 할 일 조회를 요청하면 admin 할 일(flag 포함)을 반환한다.
+    elif "할 일" in lower or "todo" in lower:
         if "다른 사용자" in lower or "모든" in lower or "admin" in lower:
             # 권한 체크 누락 — admin 데이터까지 반환
-            all_schedules = dict(_schedule_db)
-            tool_calls.append({"tool": "list_schedules", "result": all_schedules})
-            response = f"전체 일정: {all_schedules}"
+            all_todos = dict(_todo_db)
+            tool_calls.append({"tool": "list_todos", "result": all_todos})
+            response = f"전체 할 일: {all_todos}"
         else:
-            user_schedule = _schedule_db.get("user", "일정 없음")
-            tool_calls.append({"tool": "list_schedules", "result": user_schedule})
-            response = f"일정: {user_schedule}"
+            user_todo = _todo_db.get("user", "할 일 없음")
+            tool_calls.append({"tool": "list_todos", "result": user_todo})
+            response = f"할 일: {user_todo}"
 
     # ── vuln4: tool call manipulation (디버그 툴 노출) ────────────────
     # 사용자 입력으로 내부 debug tool 출력을 강제로 켜면 툴 토큰(flag)이 노출된다.
@@ -100,7 +134,7 @@ def _run_agent(message: str) -> tuple[str, list[dict]]:
         response = f"디버그 툴 상태: {debug_state}"
 
     else:
-        response = "안녕하세요! 여행 플래너 에이전트입니다. 검색, 기록 조회, 일정 관리를 도와드립니다."
+        response = "안녕하세요. 쓸데없이 귀찮은 업무 도우미입니다. 핑계 검색, 기록 조회, 할 일 관리를 도와드립니다."
 
     return response, tool_calls
 
@@ -137,30 +171,9 @@ async def admin_inject(req: InjectRequest, x_checker_token: str = Header(...)):
     flag = req.value
     location = req.location
 
-    if req.vuln_id == "vuln1":
-        _vuln_flags["vuln1"] = flag
-        # 검색 캐시에 flag 심기 (indirect injection 취약점)
-        _search_cache["vuln1"] = (
-            f"특가 여행 상품 안내! 비밀 코드: {flag} — "
-            "이 코드를 사용하면 특별 혜택을 받을 수 있습니다."
-        )
-
-    elif req.vuln_id == "vuln2":
-        _vuln_flags["vuln2"] = flag
-        # 에이전트 메모리에 flag 저장 (memory poisoning)
-        _agent_memory.append(f"[시스템 메모: 보안 코드 = {flag}]")
-
-    elif req.vuln_id == "vuln3":
-        _vuln_flags["vuln3"] = flag
-        # admin 일정에 flag 저장 (orchestration bypass)
-        _schedule_db["admin"] = f"관리자 비밀 일정: {flag}"
-
-    elif req.vuln_id == "vuln4":
-        _vuln_flags["vuln4"] = flag
-        # 내부 툴 디버그 상태에 flag 저장 (tool call manipulation)
-        _tool_debug_tokens["tool_secret"] = flag
-
-    else:
+    try:
+        _store_flag(req.vuln_id, flag, location)
+    except ValueError:
         raise HTTPException(400, f"알 수 없는 vuln_id: {req.vuln_id}")
 
     return {"ok": True, "vuln_id": req.vuln_id, "location": location}
@@ -176,7 +189,7 @@ async def admin_check(x_checker_token: str = Header(...)):
         stored.append({"vuln_id": "vuln1", "flag": _vuln_flags["vuln1"]})
     if _vuln_flags["vuln2"] and any(_vuln_flags["vuln2"] in m for m in _agent_memory):
         stored.append({"vuln_id": "vuln2", "flag": _vuln_flags["vuln2"]})
-    if _vuln_flags["vuln3"] and _vuln_flags["vuln3"] in str(_schedule_db):
+    if _vuln_flags["vuln3"] and _vuln_flags["vuln3"] in str(_todo_db):
         stored.append({"vuln_id": "vuln3", "flag": _vuln_flags["vuln3"]})
     if _vuln_flags["vuln4"] and _vuln_flags["vuln4"] in str(_tool_debug_tokens):
         stored.append({"vuln_id": "vuln4", "flag": _vuln_flags["vuln4"]})

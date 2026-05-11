@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
@@ -41,7 +42,7 @@ from rotation import (
 )
 from state import GameState
 from scorer import (
-    load_vuln_specs, check_availability,
+    load_vuln_specs,
     scan_response_for_flags, compute_round_scores,
 )
 from agent_runner import run_attack_agents, run_defense_agents, stop_round_agents
@@ -86,10 +87,16 @@ class AttackRequest(BaseModel):
     llm_call_id: int
     attacker_team: str
     target_team: str
-    payload: str
+    payload: str = ""
     model: str | None = None
     session_id: str | None = None
     history: list[dict] | None = None
+    path: str | None = None
+    method: str = "POST"
+    query: dict[str, Any] | None = None
+    headers: dict[str, str] | None = None
+    json_body: Any | None = None
+    data: str | None = None
 
 
 class ServiceDeployedRequest(BaseModel):
@@ -281,6 +288,13 @@ def _require_llm_call(agent_run_id: str, llm_call_id: int, purpose: str | None =
     return call
 
 
+def _round_flags_by_team(round_num: int) -> dict[str, dict[str, str]]:
+    flags: dict[str, dict[str, str]] = {team_id: {} for team_id in TEAMS}
+    for row in db.get_flags_for_round(round_num):
+        flags.setdefault(row["team_id"], {})[row["vuln_id"]] = row["flag"]
+    return flags
+
+
 # ── 헬스 엔드포인트 ───────────────────────────────────────────────────
 
 @app.get("/health")
@@ -293,6 +307,32 @@ def health():
 
 # ── agent provenance / LLM gateway ────────────────────────────────────
 
+def _create_agent_run_response(
+    req: AgentRunCreateRequest,
+    default_agent_image: str | None = None,
+    default_agent_commit: str | None = None,
+) -> dict:
+    _validate_agent_run_request(req)
+
+    run_token = secrets.token_urlsafe(32)
+    run = db.create_agent_run(
+        run_id=str(uuid4()),
+        team_id=req.team_id,
+        mode=req.mode,
+        target_team=req.target_team,
+        round_num=req.round_num,
+        run_token_hash=_hash_run_token(run_token),
+        agent_image=req.agent_image or default_agent_image,
+        agent_image_digest=req.agent_image_digest,
+        agent_commit=req.agent_commit or default_agent_commit,
+    )
+    return {
+        "agent_run_id": run["id"],
+        "agent_run_token": run_token,
+        "allowed_models": ALLOWED_MODEL_PREFIXES,
+    }
+
+
 @app.post("/agent-runs")
 def create_agent_run(
     req: AgentRunCreateRequest,
@@ -304,25 +344,21 @@ def create_agent_run(
     _verify_runner_secret(x_runner_secret)
     if RUNNER_SECRET and x_agent_sdk != SDK_NAME:
         raise HTTPException(403, "Agent SDK 요청만 허용")
-    _validate_agent_run_request(req)
+    return _create_agent_run_response(req)
 
-    run_token = secrets.token_urlsafe(32)
-    run = db.create_agent_run(
-        run_id=str(uuid4()),
-        team_id=req.team_id,
-        mode=req.mode,
-        target_team=req.target_team,
-        round_num=req.round_num,
-        run_token_hash=_hash_run_token(run_token),
-        agent_image=req.agent_image,
-        agent_image_digest=req.agent_image_digest,
-        agent_commit=req.agent_commit,
+
+@app.post("/student/agent-runs")
+def create_student_agent_run(
+    req: AgentRunCreateRequest,
+    x_team_token: str = Header(...),
+):
+    verify_agent_token(req.team_id, req.mode, x_team_token)
+    return _create_agent_run_response(
+        req,
+        default_agent_image="student-web-ui",
+        default_agent_commit="browser",
     )
-    return {
-        "agent_run_id": run["id"],
-        "agent_run_token": run_token,
-        "allowed_models": ALLOWED_MODEL_PREFIXES,
-    }
+
 
 
 @app.post("/agent-runs/{run_id}/finish")
@@ -511,6 +547,24 @@ async def llm_gateway(
 
 # ── 공격 엔드포인트 ───────────────────────────────────────────────────
 
+
+def _decode_target_response(resp: httpx.Response) -> Any:
+    try:
+        return resp.json()
+    except Exception:
+        return None
+
+
+def _target_response_text(data: Any, fallback: str) -> str:
+    if isinstance(data, dict):
+        if isinstance(data.get("response"), str):
+            return data["response"]
+        return json.dumps(data, ensure_ascii=False)
+    if isinstance(data, list):
+        return json.dumps(data, ensure_ascii=False)
+    return fallback
+
+
 @app.post("/attack")
 @limiter.limit("20/minute")
 async def attack(
@@ -557,26 +611,48 @@ async def attack(
     if state.get_attack_count(req.attacker_team) >= MAX_ATTACKS_ROUND:
         raise HTTPException(429, f"이번 라운드 공격 횟수 초과 ({MAX_ATTACKS_ROUND}턴 한도)")
 
-    # 타겟 서비스에 페이로드 전달
+    # 타겟 서비스에 요청 전달. path/json_body가 없으면 기존 /chat 템플릿 호환 모드.
     target = TEAMS[req.target_team]
-    url = f"http://{target['ip']}:{target['port']}/chat"
-    body: dict = {"message": req.payload}
-    if req.session_id:
-        body["session_id"] = req.session_id
-    if req.history:
-        body["history"] = req.history
+    method = req.method.upper()
+    if method not in {"GET", "POST", "PUT", "PATCH", "DELETE"}:
+        raise HTTPException(400, "method는 GET/POST/PUT/PATCH/DELETE만 허용")
+    path = req.path or "/chat"
+    if not path.startswith("/") or "://" in path or ".." in path:
+        raise HTTPException(400, "path는 target service 내부 절대경로여야 함")
+    url = f"http://{target['ip']}:{target['port']}{path}"
+
+    outbound_headers = {
+        key: value
+        for key, value in (req.headers or {}).items()
+        if key.lower() not in {"host", "content-length"}
+    }
+
+    json_body = req.json_body
+    if json_body is None and req.data is None and req.path is None:
+        json_body = {"message": req.payload}
+        if req.session_id:
+            json_body["session_id"] = req.session_id
+        if req.history:
+            json_body["history"] = req.history
 
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(url, json=body)
+            resp = await client.request(
+                method,
+                url,
+                params=req.query or {},
+                headers=outbound_headers,
+                json=json_body,
+                data=req.data,
+            )
             resp.raise_for_status()
-            data = resp.json()
     except httpx.HTTPStatusError as e:
         raise HTTPException(502, f"타겟 서비스 오류: {e.response.status_code}")
     except Exception as e:
         raise HTTPException(503, f"타겟 서비스 응답 없음: {str(e)}")
 
-    response_text = data.get("response", "")
+    data = _decode_target_response(resp)
+    response_text = _target_response_text(data, resp.text)
 
     state.record_attack(req.attacker_team)
 
@@ -584,11 +660,24 @@ async def attack(
     found_flags = scan_response_for_flags(response_text)
 
     # 감사 로그
+    request_fingerprint = json.dumps(
+        {
+            "method": method,
+            "path": path,
+            "query": req.query or {},
+            "payload": req.payload,
+            "json_body": json_body,
+            "data": req.data,
+        },
+        sort_keys=True,
+        ensure_ascii=False,
+        default=str,
+    )
     db.append_audit(
         round_num=state.current_round,
         attacker=req.attacker_team,
         target=req.target_team,
-        payload_hash=hashlib.sha256(req.payload.encode()).hexdigest(),
+        payload_hash=hashlib.sha256(request_fingerprint.encode()).hexdigest(),
         model=llm_call.get("model") or req.model,
         exploited=bool(found_flags),
         scored=False,
@@ -598,15 +687,18 @@ async def attack(
     )
 
     return {
+        "status_code": resp.status_code,
         "response": response_text,
-        "tool_calls": data.get("tool_calls", []),
+        "body": resp.text,
+        "json": data if isinstance(data, (dict, list)) else None,
+        "tool_calls": data.get("tool_calls", []) if isinstance(data, dict) else [],
         "flags_found": found_flags,
         "hint": "발견된 flag가 재현되도록 poc*.py를 제출하세요" if found_flags else None,
         "turns_remaining": MAX_ATTACKS_ROUND - state.get_attack_count(req.attacker_team),
     }
 
 
-# ── PoC 제출/검수/실행 ────────────────────────────────────────────────
+# ── PoC 제출/실행 ────────────────────────────────────────────────────
 
 _POC_NAME_RE = r"^poc[A-Za-z0-9_.-]*\.py$"
 _POC_BANNED_PATTERNS = [
@@ -639,6 +731,23 @@ def _validate_poc_static(file_name: str, content: bytes) -> str:
         if pattern in lowered:
             return f"금지 패턴 포함: {pattern}"
     return ""
+
+
+def _run_pocs(round_num: int, only_poc_id: str | None = None) -> list[dict]:
+    return run_pocs_for_round(
+        round_num=round_num,
+        teams=TEAMS,
+        data_dir=DATA_DIR,
+        timeout_sec=POC_TIMEOUT_SEC,
+        output_max_bytes=POC_OUTPUT_MAX_BYTES,
+        attack_reward=ATTACK_REWARD,
+        attack_penalty=ATTACK_PENALTY,
+        only_poc_id=only_poc_id,
+        runner_mode=POC_RUNNER_MODE,
+        docker_network=POC_DOCKER_NETWORK,
+        docker_image=POC_DOCKER_IMAGE,
+        host_data_dir=POC_HOST_DATA_DIR,
+    )
 
 
 @app.post("/pocs")
@@ -689,11 +798,13 @@ async def submit_poc(
 
     duplicate = db.find_poc_by_sha(attacker_team, target_team, sha256)
     if duplicate:
+        run_results = _run_pocs(state.current_round, only_poc_id=duplicate["id"])
         return {
             "poc_id": duplicate["id"],
             "status": "merged",
             "canonical_poc_id": duplicate.get("canonical_poc_id") or duplicate["id"],
             "sha256": sha256,
+            "run_result": run_results[0] if run_results else None,
         }
 
     poc_id = str(uuid4())
@@ -715,7 +826,13 @@ async def submit_poc(
         sha256=sha256,
         storage_path=str(storage_path),
     )
-    return {"poc_id": poc["id"], "status": poc["status"], "sha256": poc["sha256"]}
+    run_results = _run_pocs(state.current_round, only_poc_id=poc["id"])
+    return {
+        "poc_id": poc["id"],
+        "status": poc["status"],
+        "sha256": poc["sha256"],
+        "run_result": run_results[0] if run_results else None,
+    }
 
 
 @app.get("/admin/pocs")
@@ -726,15 +843,6 @@ def list_pocs(
 ):
     verify_admin(x_admin_secret)
     return {"pocs": db.list_poc_submissions(status=status, limit=limit)}
-
-
-@app.post("/admin/pocs/{poc_id}/accept")
-def accept_poc(poc_id: str, req: PocReviewRequest, x_admin_secret: str = Header(...)):
-    verify_admin(x_admin_secret)
-    if not db.get_poc_submission(poc_id):
-        raise HTTPException(404, "PoC 없음")
-    db.update_poc_status(poc_id, "accepted", req.reason)
-    return {"ok": True, "poc_id": poc_id, "status": "accepted"}
 
 
 @app.post("/admin/pocs/{poc_id}/reject")
@@ -750,20 +858,7 @@ def reject_poc(poc_id: str, req: PocReviewRequest, x_admin_secret: str = Header(
 def run_pocs(req: RunPocsRequest, x_admin_secret: str = Header(...)):
     verify_admin(x_admin_secret)
     round_num = req.round_num if req.round_num is not None else state.current_round
-    results = run_pocs_for_round(
-        round_num=round_num,
-        teams=TEAMS,
-        data_dir=DATA_DIR,
-        timeout_sec=POC_TIMEOUT_SEC,
-        output_max_bytes=POC_OUTPUT_MAX_BYTES,
-        attack_reward=ATTACK_REWARD,
-        attack_penalty=ATTACK_PENALTY,
-        only_poc_id=req.only_poc_id,
-        runner_mode=POC_RUNNER_MODE,
-        docker_network=POC_DOCKER_NETWORK,
-        docker_image=POC_DOCKER_IMAGE,
-        host_data_dir=POC_HOST_DATA_DIR,
-    )
+    results = _run_pocs(round_num, only_poc_id=req.only_poc_id)
     return {"round": round_num, "results": results}
 
 
@@ -810,19 +905,7 @@ async def start_round(
         TEAMS, vuln_specs, round_flags_by_team, CHECKER_TOKEN
     )
 
-    poc_results = run_pocs_for_round(
-        round_num=next_round,
-        teams=TEAMS,
-        data_dir=DATA_DIR,
-        timeout_sec=POC_TIMEOUT_SEC,
-        output_max_bytes=POC_OUTPUT_MAX_BYTES,
-        attack_reward=ATTACK_REWARD,
-        attack_penalty=ATTACK_PENALTY,
-        runner_mode=POC_RUNNER_MODE,
-        docker_network=POC_DOCKER_NETWORK,
-        docker_image=POC_DOCKER_IMAGE,
-        host_data_dir=POC_HOST_DATA_DIR,
-    )
+    poc_results = _run_pocs(next_round)
 
     # 공식 공격/방어 에이전트 컨테이너 실행
     run_attack_agents(next_round, TEAMS, COORDINATOR_URL, TEAM_TOKENS, ATTACK_AGENT_IMAGES)
@@ -847,10 +930,18 @@ async def end_round(x_admin_secret: str = Header(...)):
     current = state.current_round
     stop_round_agents(current)
 
-    # flag 만료
-    fm.expire_round_flags(current)
+    # 라운드 종료 시에도 전체 checker를 실행해 배포/재시작 후 stale 상태로
+    # 가용성 보너스가 잘못 지급되지 않게 한다.
+    checker_results = await chk.run_all_checkers(
+        TEAMS, vuln_specs, _round_flags_by_team(current), CHECKER_TOKEN
+    )
+    availability = {
+        team_id: result.health_ok
+        for team_id, result in checker_results.items()
+    }
 
-    availability = await check_availability(TEAMS)
+    # checker가 현재 라운드 flag로 최종 상태를 기록한 뒤 만료 처리한다.
+    fm.expire_round_flags(current)
 
     # 점수 계산
     round_result = compute_round_scores(
@@ -902,7 +993,7 @@ async def service_deployed(req: ServiceDeployedRequest, x_admin_secret: str = He
     if spec_path.exists():
         with spec_path.open() as f:
             spec_data = json.load(f)
-        vuln_specs[req.team_id] = spec_data.get("vulnerabilities", [])
+        vuln_specs[req.team_id] = spec_data
     await handle_service_deployed(
         req.team_id,
         req.commit,

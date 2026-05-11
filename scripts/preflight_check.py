@@ -9,7 +9,7 @@
 
 검증 항목:
   1. coordinator /health 응답 확인
-  2. 모든 팀 서비스 /health 응답 확인
+  2. 모든 팀 서비스 health 응답 확인 (vuln_spec.service.health, 미지정 시 /health)
   3. 모든 팀 취약점 --repeat 회 반복 검증 (N/N 성공)
   4. 전체 통과 시 POST /admin/preflight-done 호출
 """
@@ -47,14 +47,44 @@ def check_coordinator_health(coordinator_url: str) -> bool:
         return False
 
 
-def check_team_health(teams: dict) -> dict[str, bool]:
+def _team_specs() -> dict[str, dict]:
+    specs = {}
+    for spec_file in sorted(VULN_SPEC_DIR.glob("*.json")):
+        if spec_file.name == "example.json":
+            continue
+        spec = load_spec(str(spec_file))
+        if spec.get("team_id"):
+            specs[spec["team_id"]] = spec
+    return specs
+
+
+def _health_spec(team_spec: dict | None) -> dict:
+    if team_spec and isinstance(team_spec.get("service"), dict):
+        health = team_spec["service"].get("health")
+        if isinstance(health, dict):
+            return health
+    return {"endpoint": "/health", "method": "GET", "expect_status": 200}
+
+
+def check_team_health(teams: dict, specs: dict[str, dict]) -> dict[str, bool]:
     print(f"\n[2/3] 팀 서비스 헬스 체크 ({len(teams)}팀)")
     results = {}
     for team_id, info in teams.items():
-        url = f"http://{info['ip']}:{info['port']}/health"
+        spec = _health_spec(specs.get(team_id))
+        endpoint = spec.get("endpoint", "/health")
+        url = f"http://{info['ip']}:{info['port']}{endpoint}"
+        method = spec.get("method", "GET").upper()
         try:
-            r = httpx.get(url, timeout=5.0)
-            ok = r.status_code == 200
+            r = httpx.request(
+                method,
+                url,
+                headers=spec.get("headers", {}),
+                params=spec.get("params", spec.get("query", {})),
+                json=spec.get("json", spec.get("body")),
+                data=spec.get("data"),
+                timeout=5.0,
+            )
+            ok = r.status_code == spec.get("expect_status", 200)
             results[team_id] = ok
             mark = "✓" if ok else "✗"
             print(f"  {mark} {team_id} ({url}) — HTTP {r.status_code}")
@@ -156,6 +186,7 @@ def main():
         teams = load_teams_from_config()
 
     hosts = {tid: info["ip"] for tid, info in teams.items()}
+    specs = _team_specs()
 
     failures = []
 
@@ -164,7 +195,7 @@ def main():
         failures.append("coordinator health")
 
     # 2. 팀 서비스 헬스
-    team_health = check_team_health(teams)
+    team_health = check_team_health(teams, specs)
     failed_teams = [t for t, ok in team_health.items() if not ok]
     if failed_teams:
         failures.append(f"팀 서비스 다운: {', '.join(failed_teams)}")

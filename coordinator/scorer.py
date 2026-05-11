@@ -4,7 +4,7 @@
 PoC 방식:
   1. 공격 에이전트가 /attack으로 탐색
   2. 재현 가능한 poc*.py를 /pocs로 제출
-  3. accepted PoC를 라운드마다 runner가 실행
+  3. 제출된 PoC를 라운드마다 runner가 실행
   4. coordinator가 active_flags와 대조 → 점수 부여
 
 SLA 상태 반영:
@@ -15,7 +15,7 @@ SLA 상태 반영:
 import json
 import logging
 import os
-from typing import Dict
+from typing import Any, Dict
 
 import httpx
 
@@ -25,9 +25,9 @@ from flag_manager import extract_flags_from_text
 logger = logging.getLogger(__name__)
 
 
-def load_vuln_specs(vuln_spec_dir: str) -> Dict[str, list]:
-    """팀별 취약점 전체 스펙 로드. {team_id: [vuln_dict, ...]}"""
-    specs: Dict[str, list] = {}
+def load_vuln_specs(vuln_spec_dir: str) -> Dict[str, dict]:
+    """팀별 취약점 전체 스펙 로드. {team_id: vuln_spec_dict}"""
+    specs: Dict[str, dict] = {}
     if not os.path.exists(vuln_spec_dir):
         return specs
     for fname in os.listdir(vuln_spec_dir):
@@ -39,7 +39,7 @@ def load_vuln_specs(vuln_spec_dir: str) -> Dict[str, list]:
         team_id = data.get("team_id")
         vulns = data.get("vulnerabilities", [])
         if team_id and vulns:
-            specs[team_id] = vulns
+            specs[team_id] = data
     return specs
 
 
@@ -48,18 +48,49 @@ def scan_response_for_flags(response_text: str) -> list[str]:
     return extract_flags_from_text(response_text)
 
 
-async def check_availability(teams: dict) -> Dict[str, bool]:
-    """각 팀 방어 에이전트 /health 체크. SLA 계산용."""
+async def check_availability(teams: dict, vuln_specs: dict | None = None) -> Dict[str, bool]:
+    """각 팀 서비스 health 체크. vuln_spec.service.health가 있으면 그 요청을 사용한다."""
     results = {}
     async with httpx.AsyncClient(timeout=5.0) as client:
         for team_id, info in teams.items():
-            url = f"http://{info['ip']}:{info['port']}/health"
+            base_url = f"http://{info['ip']}:{info['port']}"
+            health_spec = _get_service_health((vuln_specs or {}).get(team_id, {}))
             try:
-                r = await client.get(url)
-                results[team_id] = r.status_code == 200
+                r = await _send_health_request(client, base_url, health_spec)
+                results[team_id] = r.status_code == health_spec.get("expect_status", 200)
             except Exception:
                 results[team_id] = False
     return results
+
+
+def _get_service_health(team_spec: dict | list) -> dict:
+    if isinstance(team_spec, dict) and isinstance(team_spec.get("service"), dict):
+        health = team_spec["service"].get("health")
+        if isinstance(health, dict):
+            return health
+    return {"endpoint": "/health", "method": "GET", "expect_status": 200}
+
+
+async def _send_health_request(client: httpx.AsyncClient, base_url: str, spec: dict) -> httpx.Response:
+    endpoint = spec.get("endpoint", "/health")
+    if not str(endpoint).startswith("/"):
+        raise ValueError("health endpoint must start with '/'")
+    method = spec.get("method", "GET").upper()
+    headers = _substitute(spec.get("headers", {}))
+    params = _substitute(spec.get("params", spec.get("query", {})))
+    body = _substitute(spec.get("json", spec.get("body")))
+    data = _substitute(spec.get("data"))
+    return await client.request(method, base_url + endpoint, headers=headers, params=params, json=body, data=data)
+
+
+def _substitute(obj: Any) -> Any:
+    if isinstance(obj, str):
+        return obj
+    if isinstance(obj, dict):
+        return {k: _substitute(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_substitute(v) for v in obj]
+    return obj
 
 
 def compute_round_scores(

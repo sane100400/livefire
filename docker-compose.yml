@@ -71,7 +71,7 @@ services:
     ports:
       - "8080:80"
     networks:
-      - scoring-net
+      - egress-net
     restart: unless-stopped
 
   # ── Team Services (행사 전 팀 이미지 빌드 후 주석 해제) ───────────────

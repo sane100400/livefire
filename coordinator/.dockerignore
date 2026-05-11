@@ -1,0 +1,7 @@
+.env
+game_state.db
+*.db
+*.db-*
+__pycache__
+*.py[cod]
+.pytest_cache
