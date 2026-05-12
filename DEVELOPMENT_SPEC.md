@@ -4,7 +4,8 @@
 
 ## 목표
 
-- 팀은 직접 사이트를 만들고 flag 4개를 심는다.
+- 팀은 자유롭게 웹 서비스를 만들고 flag 4개를 심는다.
+- 고정 필수 API는 없다. health, flag 주입/조회, 기본 기능 검증 요청은 `vuln_spec.json`에 선언한다.
 - 사이트는 시계 방향으로 한 칸 옆 팀이 방어한다.
 - 공격과 방어 산출물은 반드시 팀 AI 에이전트가 만든 것으로 증명되어야 한다.
 - 개발 과정에서는 외부 LLM, IDE AI, 오케스트레이션 LLM 사용을 허용한다.
@@ -285,7 +286,7 @@ Submit rules:
 
 ### POST /admin/pocs/{poc_id}/reject
 
-비정상 제출물의 비활성화 사유를 기록한다.
+비정상 제출물의 비활성화 사유를 기록한다. PoC는 `submitted` 상태에서 시스템 실행 대상이 되며, 이 엔드포인트는 규칙 위반 파일을 사후 비활성화할 때만 사용한다.
 
 ### POST /admin/run-pocs
 
@@ -369,12 +370,12 @@ CREATE TABLE poc_submissions (
     canonical_poc_id  TEXT,
     review_reason     TEXT,
     created_at        TEXT NOT NULL,
-    accepted_at       TEXT,
+    accepted_at       TEXT, -- legacy compatibility. 신규 PoC는 submitted 상태로 바로 실행
     UNIQUE(attacker_team, target_team, sha256)
 );
 ```
 
-`status`: `submitted`, `rejected`, `merged`, `disabled`. 기존 DB 호환을 위해 `pending`, `accepted`도 실행 대상으로 취급한다.
+`status`: `submitted`, `rejected`, `merged`, `disabled`. 신규 PoC는 수동 승인 없이 `submitted` 상태로 실행 대상이 된다. 기존 DB 호환을 위해 `pending`, `accepted`도 실행 대상으로 취급한다.
 
 ### poc_results
 
@@ -522,7 +523,7 @@ Docker socket 사용은 coordinator 내부 기능으로 제한한다. PoC runner
 4. `llm_calls` audit 기록
 5. attack_agent 템플릿을 SDK 사용 방식으로 변경
 
-Acceptance:
+완료 기준:
 
 - SDK로 시작한 attack agent가 `/llm` 호출을 남긴다.
 - 비허용 모델은 403.
@@ -536,7 +537,7 @@ Acceptance:
 4. 제출 직후 현재 라운드 자동 실행
 5. scoreboard/admin API에서 submitted PoC와 실행 결과 표시
 
-Acceptance:
+완료 기준:
 
 - SDK `submit_poc()`로 제출하면 submitted 생성 후 시스템이 실행한다.
 - `/llm` 호출 없는 run의 PoC는 reject.
@@ -550,7 +551,7 @@ Acceptance:
 4. flag 검증 및 점수 반영
 5. `round_exploits`를 PoC 결과 기반으로 갱신하거나 scoreboard 쿼리를 신규 테이블로 전환
 
-Acceptance:
+완료 기준:
 
 - `poc1.py`가 round 1, 2에서 성공하면 각각 +10.
 - round 3 실패 시 +0.
@@ -565,7 +566,7 @@ Acceptance:
 4. git pre-receive에서 `Agent-Run-ID` trailer 검증
 5. `service_deployments` 기록
 
-Acceptance:
+완료 기준:
 
 - 자기 사이트 공격 거부.
 - 자기 방어 대상 공격 거부.
@@ -579,7 +580,7 @@ Acceptance:
 3. 즉시 flag 제출 채점 경로 제거 상태 유지
 4. README, RULEBOOK, ORGANIZER_GUIDE 동기화
 
-Acceptance:
+완료 기준:
 
 - 운영자 화면에서 PoC별 모델, run, agent commit 추적 가능.
 - DOWN target은 PoC skipped 처리.

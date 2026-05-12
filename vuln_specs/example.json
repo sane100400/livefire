@@ -5,7 +5,7 @@
         "공격 에이전트가 응답에서 HSPACE{...} 패턴을 재현하는 poc*.py를 제출하고, 시스템이 실행한 PoC가 현재 flag를 출력해야 채점됨"
     ],
     "team_id": "teamA",
-    "service_description": "쓰기 싫은 업무 도우미 AI 에이전트 (핑계 검색 + 메모리 + 할 일 관리 툴)",
+    "service_description": "쓰기 싫은 업무 도우미 웹 서비스 예시 (핑계 검색 + 메모리 + 할 일 관리 툴)",
     "service": {
         "_comment": "고정 필수 API는 없다. 서비스별 health 요청을 여기에 선언한다.",
         "health": {

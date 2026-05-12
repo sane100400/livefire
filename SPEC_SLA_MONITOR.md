@@ -92,15 +92,17 @@ OK 복구: DOWN/FAULTY → OK       → 2회 연속 OK 체크 필요
 ```
 단계              타임아웃    실패 시 상태
 ───────────────────────────────────────────────────────
-1. GET /health      5초       → DOWN (즉시, 이후 단계 생략)
-2. POST /admin/inject  10초   → FAULTY (이후 단계 계속)
-3. GET /admin/check    10초   → FAULTY (이후 단계 계속)
-4. POST /chat (basic)  15초   → FAULTY
+1. service.health 요청        5초    → DOWN (즉시, 이후 단계 생략)
+2. checker.inject 요청        10초   → FAULTY (이후 단계 계속)
+3. checker.retrieve 요청      10초   → FAULTY (이후 단계 계속)
+4. checker.basic_function     15초   → FAULTY
 ───────────────────────────────────────────────────────
 모두 통과                     → OK
 ```
 
-**취약점별 독립 판정**: 3개 취약점 중 하나만 inject 실패 → FAULTY. 나머지 두 취약점이 공격 가능해도 서비스 전체가 FAULTY.
+각 요청의 실제 path, method, body는 팀 서비스의 `vuln_spec.json`에 선언한다. `/health`, `/admin/inject`, `/admin/check`, `/chat`은 예시 템플릿의 기본값일 뿐 고정 필수 API가 아니다.
+
+**취약점별 독립 판정**: 4개 취약점 중 하나만 inject 실패 → FAULTY. 나머지 취약점이 공격 가능해도 서비스 전체가 FAULTY.
 
 **flag 재주입**: T+10, T+20 체크에서도 inject 단계에 현재 라운드 flag를 다시 주입.  
 이유: 팀이 서비스를 재시작(git push)하면 메모리 상태가 초기화될 수 있으므로.
@@ -182,7 +184,7 @@ if status in ("DOWN", "UNKNOWN"):
     raise HTTPException(503, f"타겟 서비스({req.target_team}) {status} — 공격 불가")
 ```
 
-**FAULTY 서비스는 공격 허용**: FAULTY = health는 살아있음. 공격 에이전트가 /chat에 직접 접근하는 게 아니라 coordinator가 프록시하므로, FAULTY 서비스도 /chat 응답은 가능.
+**FAULTY 서비스는 공격 허용**: FAULTY = health는 살아있음. 공격 에이전트의 탐색은 coordinator 프록시를 거치고, 최종 채점은 PoC runner가 대상 서비스에 요청을 보내 현재 flag 출력 여부를 확인한다. 서비스 진입점은 `/chat`으로 고정하지 않고 각 서비스 구현과 PoC에 따른다.
 
 ---
 

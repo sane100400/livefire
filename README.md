@@ -32,7 +32,7 @@ make run
 다른 터미널에서:
 
 ```bash
-python scripts/verify.py --spec agent_service/vuln_spec.json --repeat 3
+python scripts/gitctf.py check --repo agent_service --repeat 3
 ```
 
 ## 전체 구조

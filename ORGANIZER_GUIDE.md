@@ -124,7 +124,7 @@ coordinator: http://<IP>:9000
 
 # 최초 제출
 python scripts/gitctf.py login teamA --token <TOKEN_TEAM_A> --coordinator http://<IP>:9000
-cd agent_service
+cd <서비스_폴더>
 python ../scripts/gitctf.py push
 
 # 패치 (대회 중)
@@ -147,14 +147,18 @@ python scripts/gitctf.py push \
 ### 제출 전 팀 자가검증 (팀이 직접 실행)
 
 ```bash
-# 서비스 로컬 실행
+# 서비스 로컬 실행. FastAPI 예시라면:
 uvicorn main:app --port 8000 &
 
-# 취약점 검증 (3회 반복)
-python scripts/verify.py --repeat 3
+# 취약점 검증 (서비스 폴더에서 실행)
+python ../scripts/gitctf.py check --repeat 3
 
-# 또는 validate_vulns.py (더 상세)
-python scripts/validate_vulns.py \
+# PoC별 flag 출력 검증
+python ../scripts/gitctf.py check --vuln 1 --poc poc1.py
+python ../scripts/gitctf.py check --poc1 poc1.py --poc2 poc2.py --poc3 poc3.py --poc4 poc4.py
+
+# 또는 validate_vulns.py 직접 실행
+python ../scripts/validate_vulns.py \
   --spec vuln_spec.json \
   --host localhost --port 8000 \
   --repeat 3 --checker-token validate-test-token
@@ -208,6 +212,7 @@ ADMIN_SECRET=$(grep ADMIN_SECRET coordinator/.env | cut -d= -f2) \
 | 팀 서비스 DOWN | 팀에게 연락 → 서비스 재시작 → 재검증 |
 | inject/retrieve 실패 | `vuln_spec.json`의 `checker.inject/retrieve` 요청과 서비스 구현 확인 |
 | attack 실패 | `vuln_spec.json`의 `attack` 요청과 `test_payload` 반응 확인 |
+| PoC 실패 | PoC가 `TARGET_HOST`, `TARGET_PORT`, `TARGET_TEAM`, `FLAG_ID`를 사용하고 stdout 마지막 non-empty line에 현재 flag를 출력하는지 확인 |
 | basic_function 실패 | 패치 후 기본 기능 망가진 경우 → 팀 코드 롤백 |
 
 ### 4-3. 강제 시작 (일부 팀 미준비 시)
@@ -394,7 +399,7 @@ hackathon/
 ├── vuln_specs/            팀별 취약점 명세
 │   ├── example.json       작성 예시
 │   └── teamA.json         (팀 제출 후 배치)
-├── agent_service/         팀 방어 서비스 템플릿
+├── agent_service/         자유 웹 서비스 개발용 예시 템플릿
 │   ├── main.py
 │   ├── vuln_spec.json
 │   └── Dockerfile
@@ -404,7 +409,7 @@ hackathon/
 ├── scripts/
 │   ├── build_user_deploy.py 참가자 배포 번들 생성
 │   ├── gitctf.py          팀 서비스 제출 helper
-│   ├── verify.py          팀 자가검증 (신규)
+│   ├── verify.py          팀 자가검증 보조 도구
 │   ├── validate_vulns.py  주최측 일괄 검증
 │   ├── preflight_check.py 이벤트 전 사전검증
 │   └── advance_round.py   cron 라운드 전환
