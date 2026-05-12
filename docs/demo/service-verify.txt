@@ -1,4 +1,4 @@
-spec: agent_service/vuln_spec.json
+spec: web_service/vuln_spec.json
 
 ==========================================================
 팀: teamA  쓰기 싫은 업무 도우미 웹 서비스 예시 (핑계 검색 + 메모리 + 할 일 관리 툴)

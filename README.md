@@ -25,14 +25,14 @@ curl http://localhost:9000/health
 예시 서비스 템플릿은 로컬에서 이렇게 확인합니다.
 
 ```bash
-cd agent_service
+cd web_service
 make run
 ```
 
 다른 터미널에서:
 
 ```bash
-python scripts/gitctf.py check --repo agent_service --repeat 3
+python scripts/gitctf.py check --repo web_service --repeat 3
 ```
 
 ## 전체 구조
@@ -64,7 +64,7 @@ flowchart TD
 |---|---|
 | `coordinator` | 라운드 진행, flag 주입, LLM 프록시, PoC 실행, 점수 계산 |
 | `scoreboard` | 현재 점수와 라운드 상태 표시 |
-| `agent_service` | 자유 웹 서비스 개발용 예시 템플릿 |
+| `web_service` | 자유 웹 서비스 개발용 예시 템플릿 |
 | `attack_agent` | 공격 에이전트 템플릿 |
 | `defense_agent` | 방어 에이전트 템플릿 |
 | `agent_sdk` | 에이전트가 coordinator와 통신하는 공통 SDK |
@@ -138,7 +138,7 @@ flowchart TD
 
 ## 팀 서비스 제출
 
-참가팀은 자유롭게 웹 서비스를 만들 수 있습니다. `agent_service/`는 참고용 템플릿입니다.
+참가팀은 자유롭게 웹 서비스를 만들 수 있습니다. `web_service/`는 참고용 템플릿입니다.
 
 필수 제출물:
 
@@ -160,6 +160,10 @@ python scripts/gitctf.py login teamA --token <TOKEN> --coordinator http://<COORD
 cd <서비스_폴더>
 python ../scripts/gitctf.py push
 ```
+
+`gitctf.py`는 실행할 때 coordinator의 `/tools/gitctf.py`에서 최신 공식 helper를 확인합니다.
+파일이 다르면 최신본을 임시 캐시에 받은 뒤 그 코드로 다시 실행합니다.
+그래도 채점과 제출 수락은 서버의 Dockerfile, `vuln_spec.json`, defense provenance 검증이 최종 기준입니다.
 
 ## 에이전트 SDK 예시
 
@@ -190,7 +194,7 @@ ctx.submit_poc(
 hackathon/
 ├── coordinator/          API, 라운드, scoring, checker, PoC runner
 ├── scoreboard/           정적 점수판
-├── agent_service/        자유 웹 서비스 예시 템플릿
+├── web_service/          자유 웹 서비스 예시 템플릿
 ├── attack_agent/         공격 에이전트 템플릿
 ├── defense_agent/        방어 에이전트 템플릿
 ├── agent_sdk/            공통 SDK

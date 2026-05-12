@@ -49,6 +49,7 @@ services:
       - ./vuln_specs:/app/vuln_specs                    # post-receive에서 teamX.json 추출
       - ./repos:/app/repos                              # git bare repos
       - ./data:/app/data                                # PoC 제출/실행 결과
+      - ./scripts:/app/tools:ro                         # 참가자 helper 최신본 배포
       - /var/run/docker.sock:/var/run/docker.sock        # 에이전트 컨테이너 실행용
     restart: unless-stopped
     healthcheck:

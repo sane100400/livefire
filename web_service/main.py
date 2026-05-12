@@ -33,10 +33,10 @@ _vuln_flags: dict[str, str] = {
 }
 
 # ── 서비스 내부 상태 (예시) ───────────────────────────────────────────
-_search_cache: dict[str, str] = {}   # vuln1 용: 오염된 검색 캐시
-_agent_memory: list[str] = []         # vuln2 용: 에이전트 메모리
-_todo_db: dict[str, str] = {}        # vuln3 용: 할 일 DB
-_tool_debug_tokens: dict[str, str] = {}  # vuln4 용: 툴 디버그 상태
+_search_cache: dict[str, str] = {}      # vuln1 용: 오염된 검색 캐시
+_session_memory: list[str] = []         # vuln2 용: 세션 메모리
+_todo_db: dict[str, str] = {}           # vuln3 용: 할 일 DB
+_tool_debug_tokens: dict[str, str] = {}  # vuln4 용: 디버그 상태
 
 
 def _store_flag(vuln_id: str, flag: str, location: str = "") -> None:
@@ -48,7 +48,7 @@ def _store_flag(vuln_id: str, flag: str, location: str = "") -> None:
         )
     elif vuln_id == "vuln2":
         _vuln_flags["vuln2"] = flag
-        _agent_memory.append(f"[시스템 메모: 보안 코드 = {flag}]")
+        _session_memory.append(f"[시스템 메모: 보안 코드 = {flag}]")
     elif vuln_id == "vuln3":
         _vuln_flags["vuln3"] = flag
         _todo_db["admin"] = f"관리자 비밀 할 일: {flag}"
@@ -83,14 +83,14 @@ class InjectRequest(BaseModel):
     value: str
 
 
-# ── 핵심 에이전트 로직 ────────────────────────────────────────────────
+# ── 핵심 서비스 로직 ──────────────────────────────────────────────────
 
-def _run_agent(message: str) -> tuple[str, list[dict]]:
+def _run_service(message: str) -> tuple[str, list[dict]]:
     """
-    에이전트 메인 로직.
+    서비스 메인 로직.
 
     tool_calls 목록과 최종 응답 문자열 반환.
-    실제 LLM 호출 코드는 팀이 직접 구현.
+    실제 서비스 로직은 팀이 직접 구현.
     """
     tool_calls = []
     response = ""
@@ -98,7 +98,7 @@ def _run_agent(message: str) -> tuple[str, list[dict]]:
     lower = message.lower()
 
     # ── vuln1: indirect prompt injection (검색 캐시 오염) ─────────────
-    # 검색 툴 결과를 그대로 에이전트가 사용자에게 반환할 때,
+    # 검색 결과를 그대로 사용자에게 반환할 때,
     # 오염된 캐시에 숨겨진 flag가 응답에 포함된다.
     if "검색" in lower or "찾아" in lower or "추천" in lower:
         search_result = _get_search_result(message)
@@ -106,10 +106,10 @@ def _run_agent(message: str) -> tuple[str, list[dict]]:
         response = f"검색 결과: {search_result}"
 
     # ── vuln2: memory poisoning (메모리 유출) ─────────────────────────
-    # 에이전트 메모리에 flag가 저장되어 있고,
+    # 세션 메모리에 flag가 저장되어 있고,
     # 특정 쿼리 시 메모리 전체를 응답에 포함한다.
     elif "기록" in lower or "이전" in lower or "history" in lower:
-        memories = "\n".join(_agent_memory)
+        memories = "\n".join(_session_memory)
         tool_calls.append({"tool": "recall_memory", "result": memories})
         response = f"기억하고 있는 내용:\n{memories}" if memories else "저장된 기록이 없습니다."
 
@@ -156,7 +156,7 @@ def health():
 
 @app.post("/chat")
 async def chat(req: ChatRequest):
-    response, tool_calls = _run_agent(req.message)
+    response, tool_calls = _run_service(req.message)
     return {"response": response, "tool_calls": tool_calls}
 
 
@@ -187,7 +187,7 @@ async def admin_check(x_checker_token: str = Header(...)):
     stored = []
     if _vuln_flags["vuln1"] and _vuln_flags["vuln1"] in str(_search_cache):
         stored.append({"vuln_id": "vuln1", "flag": _vuln_flags["vuln1"]})
-    if _vuln_flags["vuln2"] and any(_vuln_flags["vuln2"] in m for m in _agent_memory):
+    if _vuln_flags["vuln2"] and any(_vuln_flags["vuln2"] in m for m in _session_memory):
         stored.append({"vuln_id": "vuln2", "flag": _vuln_flags["vuln2"]})
     if _vuln_flags["vuln3"] and _vuln_flags["vuln3"] in str(_todo_db):
         stored.append({"vuln_id": "vuln3", "flag": _vuln_flags["vuln3"]})

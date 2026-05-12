@@ -111,6 +111,10 @@ python scripts/build_user_deploy.py
 # user_deploy/ 폴더만 압축해서 참가자에게 전달
 ```
 
+coordinator는 `/tools/gitctf.py`와 `/tools/validate_vulns.py`로 최신 helper를 제공한다.
+공식 `gitctf.py`는 실행 시 이 경로를 확인하고 최신본으로 재실행한다.
+그래도 참가자 helper는 최종 신뢰 경계가 아니므로, push 수락 여부는 서버의 pre-receive와 PoC runner 검증을 기준으로 본다.
+
 ---
 
 ## 3. 팀 서비스 제출 안내 (D-0 ~21:00까지)
@@ -399,7 +403,7 @@ hackathon/
 ├── vuln_specs/            팀별 취약점 명세
 │   ├── example.json       작성 예시
 │   └── teamA.json         (팀 제출 후 배치)
-├── agent_service/         자유 웹 서비스 개발용 예시 템플릿
+├── web_service/          자유 웹 서비스 개발용 예시 템플릿
 │   ├── main.py
 │   ├── vuln_spec.json
 │   └── Dockerfile

@@ -3,7 +3,7 @@ Git Smart HTTP 핸들러 + pre/post-receive 훅 로직.
 
 팀은 서비스 코드를 git push로 제출/패치한다:
   python scripts/gitctf.py login teamA --token "$TEAM_TOKEN" --coordinator http://coordinator:9000
-  cd agent_service && python ../scripts/gitctf.py push
+  cd <서비스_폴더> && python ../scripts/gitctf.py push
 
 raw git도 지원한다:
   git remote add organizer http://teamA:<TEAM_TOKEN>@coordinator:9000/git/teamA && git push organizer main

@@ -5,22 +5,28 @@ from __future__ import annotations
 import argparse
 import base64
 import getpass
+import hashlib
 import json
 import os
 import subprocess
 import sys
+import tempfile
+import urllib.request
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 
+GITCTF_TRUSTED_BOOTSTRAP = True
 REMOTE_NAME = "organizer"
 CONFIG_PATH = Path(os.getenv("GITCTF_CONFIG", "~/.config/hspace-gitctf/config.json")).expanduser()
+UPDATE_CACHE_DIR = Path(os.getenv("GITCTF_CACHE_DIR", "~/.cache/hspace-gitctf")).expanduser()
+DEFAULT_UPDATE_URL = "https://raw.githubusercontent.com/sane100400/livefire/main/scripts/gitctf.py"
 COMMON_FLOW = """처음 쓰는 순서:
   1. 로그인 저장
      python scripts/gitctf.py login teamA --token <TEAM_TOKEN> --coordinator http://HOST:9000
 
   2. 서비스 폴더로 이동
-     cd agent_service
+     cd <서비스_폴더>
 
   3. 제출 전 검증
      python ../scripts/gitctf.py check
@@ -28,6 +34,153 @@ COMMON_FLOW = """처음 쓰는 순서:
   4. 제출
      python ../scripts/gitctf.py push
 """
+
+
+def _sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _fetch_url(url: str, timeout: float = 5.0) -> bytes:
+    req = urllib.request.Request(url, headers={"User-Agent": "hspace-gitctf/1"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.read()
+
+
+def _extract_cli_option(argv: list[str], name: str) -> str | None:
+    prefix = f"{name}="
+    for idx, item in enumerate(argv):
+        if item == name and idx + 1 < len(argv):
+            return argv[idx + 1]
+        if item.startswith(prefix):
+            return item[len(prefix):]
+    return None
+
+
+def _current_subcommand(argv: list[str]) -> str | None:
+    commands = {"login", "check", "verify", "push", "submit"}
+    for item in argv:
+        if item in commands:
+            return item
+        if item.startswith("-"):
+            continue
+    return None
+
+
+def _load_config_quietly() -> dict:
+    if not CONFIG_PATH.exists():
+        return {}
+    try:
+        return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _coordinator_from_argv(argv: list[str]) -> str | None:
+    return (
+        _extract_cli_option(argv, "--coordinator")
+        or os.getenv("COORDINATOR_URL")
+        or _load_config_quietly().get("coordinator")
+    )
+
+
+def _update_url_from_context(argv: list[str]) -> str | None:
+    explicit = os.getenv("GITCTF_UPDATE_URL")
+    if explicit:
+        return explicit
+    coordinator = _coordinator_from_argv(argv)
+    if coordinator:
+        return f"{coordinator.rstrip('/')}/tools/gitctf.py"
+    return DEFAULT_UPDATE_URL
+
+
+def _looks_like_gitctf_script(source: bytes) -> bool:
+    return (
+        b"GITCTF_TRUSTED_BOOTSTRAP = True" in source
+        and b"def main()" in source
+        and b"Participant-facing LiveFire" in source
+    )
+
+
+def _cache_tool(name: str, source: bytes, digest: str) -> Path:
+    target_dir = UPDATE_CACHE_DIR / digest
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target = target_dir / name
+    with tempfile.NamedTemporaryFile("wb", delete=False, dir=target_dir) as fh:
+        fh.write(source)
+        tmp = Path(fh.name)
+    tmp.replace(target)
+    return target
+
+
+def _maybe_cache_sibling(update_url: str, digest: str, name: str) -> Path | None:
+    try:
+        source = _fetch_url(urljoin(update_url, name), timeout=5.0)
+    except Exception:
+        local = Path(__file__).with_name(name)
+        if not local.exists():
+            return None
+        source = local.read_bytes()
+    return _cache_tool(name, source, digest)
+
+
+def _support_script(name: str) -> Path:
+    if name == "validate_vulns.py":
+        override = os.getenv("GITCTF_VALIDATE_VULNS_PATH")
+        if override and Path(override).exists():
+            return Path(override)
+    candidates = [Path(__file__).with_name(name)]
+    source_dir = os.getenv("GITCTF_SOURCE_DIR")
+    if source_dir:
+        candidates.append(Path(source_dir) / name)
+    for path in candidates:
+        if path.exists():
+            return path
+    return candidates[0]
+
+
+def _self_update(argv: list[str]) -> None:
+    if os.getenv("GITCTF_SELF_UPDATED") == "1" or os.getenv("GITCTF_NO_SELF_UPDATE") == "1":
+        return
+    if not argv or "-h" in argv or "--help" in argv:
+        return
+
+    update_url = _update_url_from_context(argv)
+    if not update_url:
+        return
+
+    subcommand = _current_subcommand(argv)
+    require_update = os.getenv("GITCTF_REQUIRE_SELF_UPDATE") == "1" or subcommand in {"push", "submit"}
+    try:
+        source = _fetch_url(update_url, timeout=5.0)
+        if not _looks_like_gitctf_script(source):
+            raise RuntimeError(f"공식 gitctf.py 형식이 아닙니다: {update_url}")
+        current = Path(__file__).read_bytes()
+        remote_hash = _sha256(source)
+        validate_path = None
+        if subcommand in {"check", "verify"}:
+            validate_path = _maybe_cache_sibling(update_url, remote_hash, "validate_vulns.py")
+            if validate_path:
+                os.environ["GITCTF_VALIDATE_VULNS_PATH"] = str(validate_path)
+        if _sha256(current) == remote_hash:
+            return
+        cached = _cache_tool("gitctf.py", source, remote_hash)
+        env = os.environ.copy()
+        env["GITCTF_SELF_UPDATED"] = "1"
+        env["GITCTF_SOURCE_DIR"] = str(Path(__file__).resolve().parent)
+        if validate_path:
+            env["GITCTF_VALIDATE_VULNS_PATH"] = str(validate_path)
+        env["GITCTF_ORIGINAL"] = str(Path(__file__).resolve())
+        print(f"[gitctf.py] 최신 공식 helper로 재실행합니다 ({remote_hash[:12]}).", flush=True)
+        os.execve(sys.executable, [sys.executable, str(cached), *argv], env)
+    except Exception as exc:
+        if require_update and os.getenv("GITCTF_ALLOW_STALE") != "1":
+            raise SystemExit(
+                "공식 gitctf.py 최신본 확인에 실패했습니다.\n"
+                f"업데이트 URL: {update_url}\n"
+                f"오류: {exc}\n"
+                "coordinator 주소와 네트워크를 확인하세요. 긴급 오프라인 제출만 GITCTF_ALLOW_STALE=1로 우회할 수 있습니다."
+            ) from exc
+        print(f"[gitctf.py] 최신본 확인 실패, 현재 파일로 계속합니다: {exc}", file=sys.stderr)
 
 
 def _run(cmd: list[str], cwd: Path, check: bool = True, capture: bool = False) -> subprocess.CompletedProcess:
@@ -315,7 +468,7 @@ def verify(args: argparse.Namespace) -> int:
 
     cmd = [
         sys.executable,
-        str(Path(__file__).with_name("validate_vulns.py")),
+        str(_support_script("validate_vulns.py")),
         "--spec",
         str(spec),
         "--host",
@@ -439,6 +592,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
+    _self_update(sys.argv[1:])
     parser = build_parser()
     args = parser.parse_args()
     if not hasattr(args, "func"):

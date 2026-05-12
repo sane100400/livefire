@@ -15,7 +15,7 @@ COPY_PATHS = [
     "RULEBOOK.md",
     "docs/demo",
     "agent_sdk",
-    "agent_service",
+    "web_service",
     "attack_agent",
     "defense_agent",
     "scripts/gitctf.py",
@@ -45,7 +45,7 @@ README = """# HSPACE LiveFire A&D Participant Package
 
 | 경로 | 용도 |
 |---|---|
-| `agent_service/` | 자유 웹 서비스 개발용 예시 템플릿. `Dockerfile`, `main.py`, `vuln_spec.json` 예시 포함 |
+| `web_service/` | 자유 웹 서비스 개발용 예시 템플릿. `Dockerfile`, `main.py`, `vuln_spec.json` 예시 포함 |
 | `attack_agent/` | 공격 에이전트 템플릿 |
 | `defense_agent/` | 방어 에이전트 템플릿 |
 | `agent_sdk/` | coordinator 연동 SDK |
@@ -57,10 +57,10 @@ README = """# HSPACE LiveFire A&D Participant Package
 ## 서비스 개발
 
 주제는 **"쓰기 싫은 사이트 만들기"**입니다. 쓸데없고 귀찮지만 실제로 실행되는 웹 서비스를 만들고, 의도된 취약점 4개를 심습니다.
-고정 필수 API는 없습니다. `agent_service/`는 참고용 템플릿이고, 실제 서비스 API는 `vuln_spec.json`에 맞춰 자유롭게 만들면 됩니다.
+고정 필수 API는 없습니다. `web_service/`는 참고용 템플릿이고, 실제 서비스 API는 `vuln_spec.json`에 맞춰 자유롭게 만들면 됩니다.
 
 ```bash
-cd agent_service
+cd web_service
 make run
 make verify
 ```
@@ -79,6 +79,9 @@ python scripts/gitctf.py login teamA --token "$TEAM_TOKEN" --coordinator http://
 cd <서비스_폴더>
 python ../scripts/gitctf.py push
 ```
+
+`gitctf.py`는 실행 시 coordinator에서 최신 공식 helper를 확인하고 다른 버전이면 최신본으로 재실행합니다.
+최종 제출 판정은 coordinator 서버 검증을 기준으로 합니다.
 
 ## 공격 에이전트 이미지
 

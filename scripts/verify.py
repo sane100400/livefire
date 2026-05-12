@@ -138,7 +138,7 @@ def find_spec() -> Path | None:
     candidates = [
         Path("vuln_spec.json"),
         Path("../vuln_spec.json"),
-        Path("agent_service/vuln_spec.json"),
+        Path("web_service/vuln_spec.json"),
     ]
     for p in candidates:
         if p.exists():

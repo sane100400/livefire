@@ -80,6 +80,30 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 app.include_router(git_router)
 
 
+def _tool_path(name: str) -> Path:
+    if name not in {"gitctf.py", "validate_vulns.py"}:
+        raise HTTPException(404, "tool not found")
+    candidates = [
+        Path(os.getenv("GITCTF_TOOLS_DIR", "/app/tools")) / name,
+        Path(__file__).resolve().parents[1] / "scripts" / name,
+    ]
+    for path in candidates:
+        if path.exists():
+            return path
+    raise HTTPException(404, "tool not found")
+
+
+@app.get("/tools/{name}", include_in_schema=False)
+def get_participant_tool(name: str):
+    path = _tool_path(name)
+    content = path.read_bytes()
+    return Response(
+        content,
+        media_type="text/x-python; charset=utf-8",
+        headers={"X-Content-SHA256": hashlib.sha256(content).hexdigest()},
+    )
+
+
 # ── 모델 ──────────────────────────────────────────────────────────────
 
 class AttackRequest(BaseModel):

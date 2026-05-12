@@ -560,6 +560,15 @@ class OpenRouterGatewayTests(unittest.TestCase):
                 }}
 
             with TestClient(app.app) as client:
+                tool = client.get("/tools/gitctf.py")
+                assert tool.status_code == 200, tool.text
+                assert "GITCTF_TRUSTED_BOOTSTRAP = True" in tool.text
+                assert tool.headers.get("x-content-sha256")
+
+                validate_tool = client.get("/tools/validate_vulns.py")
+                assert validate_tool.status_code == 200, validate_tool.text
+                assert "def validate_single" in validate_tool.text
+
                 bad_run = client.post(
                     "/agent-runs",
                     headers={{"X-Team-Token": "tokA", "X-Agent-SDK": "hspace-agent-sdk/1"}},

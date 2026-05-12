@@ -5,7 +5,7 @@
 
 ## 1분 요약
 
-- 참가팀은 "쓰기 싫은 사이트" 주제 안에서 자유롭게 웹 서비스를 만들고 취약점 4개를 심습니다. `agent_service/`는 참고용 예시입니다.
+- 참가팀은 "쓰기 싫은 사이트" 주제 안에서 자유롭게 웹 서비스를 만들고 취약점 4개를 심습니다. `web_service/`는 참고용 예시입니다.
 - 운영자는 팀 서비스를 Docker 이미지로 올리고, `coordinator`를 통해 flag 주입, SLA 체크, PoC 실행, 점수 계산을 합니다.
 - 공격/방어 산출물은 팀 에이전트가 `agent_sdk/`를 통해 제출해야 하며, LLM 호출 기록과 산출물 해시가 남습니다.
 - 점수는 시스템이 제출된 PoC를 실행해 현재 flag 탈취를 확인하면 공격팀 `+10`, 방어팀 `-10`, 서비스가 정상 상태이면 가용성 `+10`입니다.
@@ -40,14 +40,14 @@ curl -I http://localhost:8080/
 터미널 1:
 
 ```bash
-cd agent_service
+cd web_service
 make run
 ```
 
 터미널 2:
 
 ```bash
-python scripts/gitctf.py check --repo agent_service --repeat 3
+python scripts/gitctf.py check --repo web_service --repeat 3
 ```
 
 정상이라면 `vuln1`부터 `vuln4`까지 모두 `PASS`가 나옵니다.
@@ -55,7 +55,7 @@ python scripts/gitctf.py check --repo agent_service --repeat 3
 PoC까지 확인할 때:
 
 ```bash
-python scripts/gitctf.py check --repo agent_service --poc1 poc1.py --poc2 poc2.py --poc3 poc3.py --poc4 poc4.py
+python scripts/gitctf.py check --repo web_service --poc1 poc1.py --poc2 poc2.py --poc3 poc3.py --poc4 poc4.py
 ```
 
 ### 단위 테스트
@@ -76,8 +76,8 @@ python -m unittest discover -s tests -v
 | `docker compose config --quiet` | 통과 |
 | `curl http://localhost:9000/health` | `{"status":"ok","round":1,"round_active":false}` |
 | `curl -I http://localhost:8080/` | HTTP 200 |
-| `python scripts/gitctf.py check --repo agent_service --repeat 1` | `vuln1`~`vuln4` 전체 PASS |
-| `python scripts/gitctf.py check --repo agent_service --poc1 ... --poc4 ...` | PoC별 flag 출력 검증 PASS |
+| `python scripts/gitctf.py check --repo web_service --repeat 1` | `vuln1`~`vuln4` 전체 PASS |
+| `python scripts/gitctf.py check --repo web_service --poc1 ... --poc4 ...` | PoC별 flag 출력 검증 PASS |
 
 아직 전체 행사 preflight는 완성된 팀 이미지와 `vuln_specs/teamX.json`이 필요합니다. 현재 루트의 `vuln_specs/`에는 `example.json`만 있으므로 coordinator 로그에는 `Loaded vuln specs for: []`가 뜨는 것이 자연스럽습니다.
 
@@ -106,13 +106,14 @@ target-net ───────────────┐
 ```
 
 핵심은 `coordinator`입니다. 팀 서비스에 flag를 주입하고, 에이전트 실행 기록을 만들고, LLM 호출을 프록시하며, 제출된 PoC를 라운드마다 다시 실행해서 점수를 계산합니다.
+참가자 helper인 `gitctf.py`는 실행 시 coordinator에서 최신 공식 helper를 받아 재실행하지만, 조작 가능한 클라이언트 도구이므로 최종 보안 판단은 coordinator의 서버 검증에서 합니다.
 
 ## 디렉토리별 역할
 
 | 경로 | 역할 |
 |---|---|
 | `coordinator/` | 운영 서버. FastAPI API, SQLite 상태 저장, git smart HTTP, flag 관리, checker, scoring, agent runner가 들어 있습니다. |
-| `agent_service/` | 자유 웹 서비스 개발용 예시 템플릿입니다. `Dockerfile`, 예시 FastAPI 앱, `vuln_spec.json`, 로컬 검증용 `Makefile`이 있습니다. |
+| `web_service/` | 자유 웹 서비스 개발용 예시 템플릿입니다. `Dockerfile`, 예시 FastAPI 앱, `vuln_spec.json`, 로컬 검증용 `Makefile`이 있습니다. |
 | `attack_agent/` | 공격 에이전트 템플릿입니다. target repo snapshot을 받고, LLM으로 분석한 뒤 `/attack`과 `/pocs`를 호출합니다. |
 | `defense_agent/` | 방어 에이전트 템플릿입니다. 넘겨받은 서비스를 패치하고 `Agent-Run-ID` trailer가 붙은 커밋을 만듭니다. |
 | `agent_sdk/` | 에이전트가 coordinator와 안전하게 통신하기 위한 공통 SDK입니다. run 생성, LLM 호출, PoC 제출, git trailer 처리를 맡습니다. |
@@ -148,9 +149,9 @@ target-net ───────────────┐
 1. `docker compose ps`로 `coordinator`와 `scoreboard`가 떠 있는지 보여줍니다.
 2. `curl http://localhost:9000/health`로 coordinator 상태를 보여줍니다.
 3. 브라우저에서 `http://localhost:8080` 스코어보드를 엽니다.
-4. `agent_service/main.py`가 자유 웹 서비스 예시일 뿐이라는 점과 예시 취약점 4개를 설명합니다.
-5. `python scripts/gitctf.py check --repo agent_service --repeat 1`를 실행해 flag 주입, 탈취, 기본 기능 검증이 자동으로 도는 것을 보여줍니다.
-6. `python scripts/gitctf.py check --repo agent_service --vuln 1 --poc poc1.py` 형태로 PoC가 실제 flag를 출력해야 통과하는 것을 보여줍니다.
+4. `web_service/main.py`가 자유 웹 서비스 예시일 뿐이라는 점과 예시 취약점 4개를 설명합니다.
+5. `python scripts/gitctf.py check --repo web_service --repeat 1`를 실행해 flag 주입, 탈취, 기본 기능 검증이 자동으로 도는 것을 보여줍니다.
+6. `python scripts/gitctf.py check --repo web_service --vuln 1 --poc poc1.py` 형태로 PoC가 실제 flag를 출력해야 통과하는 것을 보여줍니다.
 7. `tests/test_core.py`를 열어 채점 규칙이 단위 테스트로 고정되어 있음을 보여줍니다.
 
 ## 문서를 읽는 순서

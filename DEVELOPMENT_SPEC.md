@@ -84,6 +84,16 @@ SDK 책임:
 - defense mode에서 git commit trailer `Agent-Run-ID: <id>` 자동 삽입
 - 실패 시 사람이 읽을 수 있는 에러 출력
 
+### gitctf.py
+
+참가자 서비스 제출 helper. 클라이언트 파일은 조작 가능하므로 신뢰 경계가 아니다.
+
+- 실행 시 coordinator의 `/tools/gitctf.py`에서 최신 공식 helper를 확인한다.
+- 현재 파일과 다르면 최신본을 로컬 캐시에 저장하고 `os.execve()`로 재실행한다.
+- `validate_vulns.py`도 같은 `/tools/validate_vulns.py` 경로에서 받아 `check`가 같은 검증 코드를 쓰게 한다.
+- `push`/`submit`은 최신본 확인 실패 시 기본적으로 중단한다. 긴급 오프라인 상황은 `GITCTF_ALLOW_STALE=1`로만 우회한다.
+- 서버의 git pre-receive, Docker build, `vuln_spec.json` 잠금, defense provenance, PoC runner 검증이 최종 보안 기준이다.
+
 ### attack_agent
 
 팀 공격 에이전트 템플릿.

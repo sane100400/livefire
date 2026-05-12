@@ -105,6 +105,8 @@ python ../scripts/gitctf.py push
 
 `push`는 변경사항을 commit하고 coordinator에 push한다.
 팀 토큰은 git 설정 파일에 저장하지 않는다.
+공식 `gitctf.py`는 실행 시 coordinator에서 최신 helper를 확인하고, 다른 버전이면 최신본으로 다시 실행한다.
+단, 참가자 PC의 helper는 편의 도구일 뿐이고 최종 제출 판정은 coordinator 서버 검증이 기준이다.
 
 ---
 
@@ -120,7 +122,7 @@ python ../scripts/gitctf.py push
 예시 템플릿은 아래처럼 확인한다.
 
 ```bash
-cd agent_service
+cd web_service
 make run
 make verify
 ```

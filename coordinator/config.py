@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).with_name(".env"))
 
 # ── 팀 설정 (행사 시작 전 주최측이 IP 채워넣기) ────────────────────
-# 각 팀은 agent_service/ 를 기본 포트 8000으로 실행한다.
+# 각 팀은 web_service/ 를 기본 포트 8000으로 실행한다.
 def _team_port(team_suffix: str) -> int:
     return int(os.getenv(f"PORT_TEAM_{team_suffix}", "8000"))
 
