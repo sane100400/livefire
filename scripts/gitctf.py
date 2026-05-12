@@ -1,22 +1,5 @@
 #!/usr/bin/env python3
-"""
-Small LiveFire A&D service submit helper.
-
-Participants use this instead of memorizing the raw git remote/push commands:
-
-  python scripts/gitctf.py login teamA --token TOKEN --coordinator http://HOST:9000
-  cd agent_service && python ../scripts/gitctf.py check
-  cd agent_service && python ../scripts/gitctf.py push
-
-Legacy explicit commands still work:
-
-  python scripts/gitctf.py verify --repo agent_service --host localhost --port 8000 --repeat 3
-  python scripts/gitctf.py submit --repo agent_service --team teamA --token TOKEN --coordinator http://HOST:9000
-  python scripts/gitctf.py submit --repo patched_service --repo-team teamA --team teamB --token DEFENSE_TOKEN --coordinator http://HOST:9000
-
-The helper keeps the team token out of .git/config by sending it as a temporary
-HTTP Basic Auth header only for the push command.
-"""
+"""Participant-facing LiveFire A&D service CLI."""
 from __future__ import annotations
 
 import argparse
@@ -32,6 +15,19 @@ from urllib.parse import urlparse
 
 REMOTE_NAME = "organizer"
 CONFIG_PATH = Path(os.getenv("GITCTF_CONFIG", "~/.config/hspace-gitctf/config.json")).expanduser()
+COMMON_FLOW = """처음 쓰는 순서:
+  1. 로그인 저장
+     python scripts/gitctf.py login teamA --token <TEAM_TOKEN> --coordinator http://HOST:9000
+
+  2. 서비스 폴더로 이동
+     cd agent_service
+
+  3. 제출 전 검증
+     python ../scripts/gitctf.py check
+
+  4. 제출
+     python ../scripts/gitctf.py push
+"""
 
 
 def _run(cmd: list[str], cwd: Path, check: bool = True, capture: bool = False) -> subprocess.CompletedProcess:
@@ -67,7 +63,27 @@ def _has_head(repo: Path) -> bool:
 
 def _require_file(repo: Path, name: str) -> None:
     if not (repo / name).exists():
-        raise SystemExit(f"ERROR: {repo / name} not found")
+        raise SystemExit(
+            f"필수 파일이 없습니다: {name}\n"
+            f"확인 위치: {repo}\n"
+            "서비스 repo 루트에서 실행했는지 확인하거나 --repo로 서비스 폴더를 지정하세요."
+        )
+
+
+def _print_section(title: str) -> None:
+    print(f"\n[{title}]", flush=True)
+
+
+def _print_kv(label: str, value: object) -> None:
+    print(f"  {label:<12} {value}", flush=True)
+
+
+def _mask_token(token: str | None) -> str:
+    if not token:
+        return "(없음)"
+    if len(token) <= 8:
+        return "<hidden>"
+    return f"{token[:4]}...{token[-4:]}"
 
 
 def _load_config() -> dict:
@@ -120,8 +136,9 @@ def _resolve_setting(
     value = cli_value or os.getenv(env_name) or config.get(config_key) or default
     if required and not value:
         raise SystemExit(
-            f"ERROR: {name} is required. Run `python scripts/gitctf.py login <team> --token <token> "
-            f"--coordinator http://HOST:9000` or set {env_name}."
+            f"{name} 값이 필요합니다.\n"
+            f"해결: `python scripts/gitctf.py login teamA --token <TEAM_TOKEN> "
+            f"--coordinator http://HOST:9000`을 먼저 실행하거나 {env_name} 환경변수를 설정하세요."
         )
     return value
 
@@ -153,9 +170,10 @@ def _stage_and_commit(repo: Path, message: str) -> None:
     staged = _git(repo, "diff", "--cached", "--quiet", check=False)
     if staged.returncode == 0:
         if not _has_head(repo):
-            raise SystemExit("ERROR: no files staged and repository has no commits")
-        print("No service changes to commit; pushing current HEAD.")
+            raise SystemExit("커밋할 파일이 없고 기존 커밋도 없습니다. 서비스 파일을 먼저 추가하세요.")
+        print("변경된 파일이 없습니다. 현재 HEAD를 그대로 제출합니다.", flush=True)
         return
+    print(f"커밋 생성: {message}", flush=True)
     _git(repo, "commit", "-m", message)
 
 
@@ -178,7 +196,7 @@ def _basic_auth_header(team: str, token: str) -> str:
 def _validate_coordinator(url: str) -> None:
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise SystemExit("ERROR: --coordinator must look like http://host:9000")
+        raise SystemExit("--coordinator는 http://HOST:9000 같은 주소여야 합니다.")
 
 
 def login(args: argparse.Namespace) -> int:
@@ -199,15 +217,22 @@ def login(args: argparse.Namespace) -> int:
 
     config.update({"team": team, "token": token, "coordinator": coordinator})
     _write_config(config)
-    print(f"Saved gitctf login for {team} at {coordinator}")
-    print(f"Config: {CONFIG_PATH}")
+    _print_section("로그인 저장 완료")
+    _print_kv("팀", team)
+    _print_kv("coordinator", coordinator)
+    _print_kv("토큰", _mask_token(token))
+    _print_kv("설정 파일", CONFIG_PATH)
+    _print_section("다음 단계")
+    print("  cd <서비스_폴더>")
+    print("  python ../scripts/gitctf.py check")
+    print("  python ../scripts/gitctf.py push")
     return 0
 
 
 def submit(args: argparse.Namespace) -> int:
     repo = Path(args.repo).resolve()
     if not repo.exists():
-        raise SystemExit(f"ERROR: repo path does not exist: {repo}")
+        raise SystemExit(f"서비스 폴더가 없습니다: {repo}")
     _load_local_env(repo)
     config = _load_config()
     team = _resolve_setting("team", args.team, "TEAM_ID", "team", config)
@@ -225,6 +250,14 @@ def submit(args: argparse.Namespace) -> int:
     _require_file(repo, "Dockerfile")
     _require_file(repo, "vuln_spec.json")
 
+    repo_team = args.repo_team or os.getenv("REPO_TEAM") or config.get("repo_team") or team
+    _print_section("제출 준비")
+    _print_kv("서비스 폴더", repo)
+    _print_kv("제출 대상", repo_team)
+    _print_kv("제출 팀", team)
+    _print_kv("coordinator", coordinator)
+    _print_kv("커밋 방식", "기존 HEAD 사용" if args.no_commit else "변경분 자동 커밋")
+
     _init_repo(repo)
     _ensure_identity(repo)
     _ensure_main_branch(repo)
@@ -233,30 +266,39 @@ def submit(args: argparse.Namespace) -> int:
     elif not _has_head(repo):
         raise SystemExit("ERROR: --no-commit requires an existing HEAD commit")
 
-    repo_team = args.repo_team or os.getenv("REPO_TEAM") or config.get("repo_team") or team
     remote_url = _set_remote(repo, coordinator, repo_team)
 
-    print(f"Submitting {repo} to {repo_team} as {team}")
-    print(f"Remote: {remote_url}")
+    _print_section("git remote")
+    _print_kv("이름", REMOTE_NAME)
+    _print_kv("주소", remote_url)
     if args.dry_run:
-        print("Dry run: commit/remote prepared, push skipped.")
+        _print_section("dry run 완료")
+        print("  여기까지 준비만 확인했습니다. 실제 push는 하지 않았습니다.")
         return 0
 
+    _print_section("push 시작")
     header = _basic_auth_header(team, token)
     _git(repo, "-c", f"http.extraHeader={header}", "push", REMOTE_NAME, "HEAD:main")
-    print("Submit complete.")
+    _print_section("제출 완료")
+    print("  coordinator가 Dockerfile 빌드와 vuln_spec.json 검사를 통과하면 서비스가 반영됩니다.")
     return 0
 
 
 def verify(args: argparse.Namespace) -> int:
     repo = Path(args.repo).resolve()
     if not repo.exists():
-        raise SystemExit(f"ERROR: repo path does not exist: {repo}")
+        raise SystemExit(f"서비스 폴더가 없습니다: {repo}")
     _load_local_env(repo)
     _require_file(repo, "Dockerfile")
     spec = Path(args.spec).resolve() if args.spec else repo / "vuln_spec.json"
     if not spec.exists():
-        raise SystemExit(f"ERROR: {spec} not found")
+        raise SystemExit(f"vuln_spec.json을 찾을 수 없습니다: {spec}")
+
+    _print_section("서비스 검증")
+    _print_kv("서비스 폴더", repo)
+    _print_kv("spec", spec)
+    _print_kv("대상", f"http://{args.host}:{args.port}")
+    _print_kv("반복", f"{args.repeat}회")
 
     cmd = [
         sys.executable,
@@ -276,97 +318,84 @@ def verify(args: argparse.Namespace) -> int:
         cmd.extend(["--save-report", args.save_report])
     result = _run(cmd, cwd=repo, check=False)
     if result.returncode != 0:
-        print("Verify failed: service must expose all four flags through the vuln_spec attack checks.", file=sys.stderr)
+        _print_section("검증 실패")
+        print("  vuln_spec.json에 선언된 4개 취약점이 모두 flag를 노출해야 제출 준비가 됩니다.", file=sys.stderr)
+        print("  서비스를 실행 중인지, --host/--port가 맞는지, checker 요청이 서비스 구현과 맞는지 확인하세요.", file=sys.stderr)
+    else:
+        _print_section("검증 완료")
+        print("  이제 `python ../scripts/gitctf.py push`로 제출할 수 있습니다.")
     return result.returncode
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="HSPACE LiveFire A&D submit helper",
+        description="HSPACE LiveFire A&D 참가자 CLI",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""Common flow:
-  python scripts/gitctf.py login teamA --token TOKEN --coordinator http://HOST:9000
-  cd agent_service
-  python ../scripts/gitctf.py check
-  python ../scripts/gitctf.py push
-""",
+        epilog=COMMON_FLOW,
     )
-    sub = parser.add_subparsers(dest="command")
+    sub = parser.add_subparsers(dest="command", metavar="<command>")
 
-    login_parser = sub.add_parser("login", help="save team/coordinator/token for short commands")
-    login_parser.add_argument("team", nargs="?", help="team id, for example teamA")
-    login_parser.add_argument("--token", help="team token; prompts if omitted on a TTY")
+    login_parser = sub.add_parser(
+        "login",
+        help="팀 토큰과 coordinator 주소를 저장",
+        description="팀 토큰과 coordinator 주소를 저장합니다. 이후 check/push에서 반복 입력하지 않아도 됩니다.",
+    )
+    login_parser.add_argument("team", nargs="?", help="팀 ID, 예: teamA")
+    login_parser.add_argument("--token", help="팀 토큰. 생략하면 터미널에서 숨김 입력으로 받습니다.")
     login_parser.add_argument(
         "--coordinator",
         default=os.getenv("COORDINATOR_URL"),
-        help="coordinator base URL, default: COORDINATOR_URL, saved config, or http://localhost:9000",
+        help="coordinator 주소. 기본값: COORDINATOR_URL, 저장된 설정, 또는 http://localhost:9000",
     )
     login_parser.set_defaults(func=login)
 
-    verify_parser = sub.add_parser("verify", help="validate a local service before submit")
-    verify_parser.add_argument("--repo", default=".", help="service repo path, default: current directory")
-    verify_parser.add_argument("--spec", help="vuln_spec.json path, default: <repo>/vuln_spec.json")
-    verify_parser.add_argument("--host", default="localhost", help="running service host, default: localhost")
-    verify_parser.add_argument("--port", type=int, default=8000, help="running service port, default: 8000")
-    verify_parser.add_argument("--repeat", type=int, default=3, help="repeat count per vuln; all attempts must pass")
-    verify_parser.add_argument(
-        "--checker-token",
-        default=os.getenv("CHECKER_TOKEN", "validate-test-token"),
-        help="checker token, default: CHECKER_TOKEN or validate-test-token",
+    check_parser = sub.add_parser(
+        "check",
+        aliases=["verify"],
+        help="제출 전 서비스와 vuln_spec.json 검증",
+        description=(
+            "로컬에서 실행 중인 서비스를 vuln_spec.json 기준으로 검증합니다.\n"
+            "기본값은 현재 폴더의 vuln_spec.json, localhost:8000, 취약점당 3회 반복입니다."
+        ),
     )
-    verify_parser.add_argument("--save-report", help="write validation JSON report")
-    verify_parser.set_defaults(func=verify)
-
-    check_parser = sub.add_parser("check", help="short alias for verify")
-    check_parser.add_argument("--repo", default=".", help="service repo path, default: current directory")
-    check_parser.add_argument("--spec", help="vuln_spec.json path, default: <repo>/vuln_spec.json")
-    check_parser.add_argument("--host", default="localhost", help="running service host, default: localhost")
-    check_parser.add_argument("--port", type=int, default=8000, help="running service port, default: 8000")
-    check_parser.add_argument("--repeat", type=int, default=3, help="repeat count per vuln; all attempts must pass")
+    check_parser.add_argument("--repo", default=".", help="서비스 repo 경로. 기본값: 현재 폴더")
+    check_parser.add_argument("--spec", help="vuln_spec.json 경로. 기본값: <repo>/vuln_spec.json")
+    check_parser.add_argument("--host", default="localhost", help="실행 중인 서비스 host. 기본값: localhost")
+    check_parser.add_argument("--port", type=int, default=8000, help="실행 중인 서비스 port. 기본값: 8000")
+    check_parser.add_argument("--repeat", type=int, default=3, help="취약점당 반복 횟수. 모든 시도가 성공해야 PASS")
     check_parser.add_argument(
         "--checker-token",
         default=os.getenv("CHECKER_TOKEN", "validate-test-token"),
-        help="checker token, default: CHECKER_TOKEN or validate-test-token",
+        help="checker 인증 토큰. 기본값: CHECKER_TOKEN 또는 validate-test-token",
     )
-    check_parser.add_argument("--save-report", help="write validation JSON report")
+    check_parser.add_argument("--save-report", help="검증 결과 JSON 저장 경로")
     check_parser.set_defaults(func=verify)
 
-    submit_parser = sub.add_parser("submit", help="commit and push a service repo")
-    submit_parser.add_argument("--repo", default=".", help="service repo path, default: current directory")
-    submit_parser.add_argument("--team", default=None, help="team id, default: TEAM_ID or gitctf login")
-    submit_parser.add_argument(
-        "--repo-team",
-        default=None,
-        help="repository owner team to push to; defaults to --team. Use this for defense pushes.",
+    push_parser = sub.add_parser(
+        "push",
+        aliases=["submit"],
+        help="서비스 repo를 commit 후 coordinator에 제출",
+        description=(
+            "서비스 repo를 main 브랜치로 정리한 뒤 coordinator git remote에 push합니다.\n"
+            "팀 토큰은 git config에 저장하지 않고 push 명령에만 임시로 붙입니다."
+        ),
     )
-    submit_parser.add_argument("--token", default=None, help="team token, default: TEAM_TOKEN or gitctf login")
-    submit_parser.add_argument(
-        "--coordinator",
-        default=None,
-        help="coordinator base URL, default: COORDINATOR_URL or http://localhost:9000",
-    )
-    submit_parser.add_argument("--message", default="Submit service", help="git commit message")
-    submit_parser.add_argument("--no-commit", action="store_true", help="push existing HEAD without staging or committing")
-    submit_parser.add_argument("--dry-run", action="store_true", help="prepare commit/remote but skip push")
-    submit_parser.set_defaults(func=submit)
-
-    push_parser = sub.add_parser("push", help="short alias for submit")
-    push_parser.add_argument("--repo", default=".", help="service repo path, default: current directory")
-    push_parser.add_argument("--team", default=None, help="team id, default: TEAM_ID or gitctf login")
+    push_parser.add_argument("--repo", default=".", help="서비스 repo 경로. 기본값: 현재 폴더")
+    push_parser.add_argument("--team", default=None, help="제출 팀 ID. 기본값: TEAM_ID 또는 login 저장값")
     push_parser.add_argument(
         "--repo-team",
         default=None,
-        help="repository owner team to push to; defaults to --team. Use this for defense pushes.",
+        help="push할 repo 소유 팀. 기본값: --team. 방어 패치 제출 때 사용합니다.",
     )
-    push_parser.add_argument("--token", default=None, help="team token, default: TEAM_TOKEN or gitctf login")
+    push_parser.add_argument("--token", default=None, help="팀 토큰. 기본값: TEAM_TOKEN 또는 login 저장값")
     push_parser.add_argument(
         "--coordinator",
         default=None,
-        help="coordinator base URL, default: COORDINATOR_URL or saved login",
+        help="coordinator 주소. 기본값: COORDINATOR_URL 또는 login 저장값",
     )
-    push_parser.add_argument("--message", default="Submit service", help="git commit message")
-    push_parser.add_argument("--no-commit", action="store_true", help="push existing HEAD without staging or committing")
-    push_parser.add_argument("--dry-run", action="store_true", help="prepare commit/remote but skip push")
+    push_parser.add_argument("--message", default="Submit service", help="자동 커밋 메시지")
+    push_parser.add_argument("--no-commit", action="store_true", help="자동 커밋 없이 현재 HEAD를 제출")
+    push_parser.add_argument("--dry-run", action="store_true", help="커밋/remote 준비만 하고 실제 push는 하지 않음")
     push_parser.set_defaults(func=submit)
     return parser
 
@@ -376,7 +405,7 @@ def main() -> int:
     args = parser.parse_args()
     if not hasattr(args, "func"):
         parser.print_help()
-        return 2
+        return 0
     return args.func(args)
 
 
