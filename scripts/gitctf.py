@@ -298,7 +298,20 @@ def verify(args: argparse.Namespace) -> int:
     _print_kv("서비스 폴더", repo)
     _print_kv("spec", spec)
     _print_kv("대상", f"http://{args.host}:{args.port}")
-    _print_kv("반복", f"{args.repeat}회")
+    poc_mode = bool(args.vuln or args.poc or any(getattr(args, f"poc{idx}") for idx in range(1, 5)))
+    if not poc_mode:
+        _print_kv("반복", f"{args.repeat}회")
+    if poc_mode:
+        _print_kv("PoC 검증", "사용")
+        _print_kv("제한 시간", f"{args.poc_timeout}초")
+        if args.vuln:
+            _print_kv("취약점", args.vuln)
+        if args.poc:
+            _print_kv("PoC", args.poc)
+        for idx in range(1, 5):
+            poc = getattr(args, f"poc{idx}")
+            if poc:
+                _print_kv(f"poc{idx}", poc)
 
     cmd = [
         sys.executable,
@@ -314,13 +327,27 @@ def verify(args: argparse.Namespace) -> int:
         "--checker-token",
         args.checker_token,
     ]
+    if args.vuln:
+        cmd.extend(["--vuln", args.vuln])
+    if args.poc:
+        cmd.extend(["--poc", args.poc])
+    for idx in range(1, 5):
+        poc = getattr(args, f"poc{idx}")
+        if poc:
+            cmd.extend([f"--poc{idx}", poc])
+    if args.poc_timeout:
+        cmd.extend(["--poc-timeout", str(args.poc_timeout)])
     if args.save_report:
         cmd.extend(["--save-report", args.save_report])
     result = _run(cmd, cwd=repo, check=False)
     if result.returncode != 0:
         _print_section("검증 실패")
-        print("  vuln_spec.json에 선언된 4개 취약점이 모두 flag를 노출해야 제출 준비가 됩니다.", file=sys.stderr)
-        print("  서비스를 실행 중인지, --host/--port가 맞는지, checker 요청이 서비스 구현과 맞는지 확인하세요.", file=sys.stderr)
+        if poc_mode:
+            print("  PoC가 주입된 flag를 stdout의 마지막 non-empty line에 출력해야 PASS입니다.", file=sys.stderr)
+            print("  PoC는 TARGET_HOST, TARGET_PORT, TARGET_TEAM, FLAG_ID 환경변수를 사용하세요.", file=sys.stderr)
+        else:
+            print("  vuln_spec.json에 선언된 4개 취약점이 모두 flag를 노출해야 제출 준비가 됩니다.", file=sys.stderr)
+            print("  서비스를 실행 중인지, --host/--port가 맞는지, checker 요청이 서비스 구현과 맞는지 확인하세요.", file=sys.stderr)
     else:
         _print_section("검증 완료")
         print("  이제 `python ../scripts/gitctf.py push`로 제출할 수 있습니다.")
@@ -355,7 +382,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="제출 전 서비스와 vuln_spec.json 검증",
         description=(
             "로컬에서 실행 중인 서비스를 vuln_spec.json 기준으로 검증합니다.\n"
-            "기본값은 현재 폴더의 vuln_spec.json, localhost:8000, 취약점당 3회 반복입니다."
+            "서비스는 자유롭게 만든 웹 서비스이면 됩니다. 고정 API는 vuln_spec.json에 선언합니다.\n"
+            "PoC 옵션을 주면 실제 runner처럼 poc*.py가 flag를 출력하는지도 확인합니다."
         ),
     )
     check_parser.add_argument("--repo", default=".", help="서비스 repo 경로. 기본값: 현재 폴더")
@@ -368,6 +396,16 @@ def build_parser() -> argparse.ArgumentParser:
         default=os.getenv("CHECKER_TOKEN", "validate-test-token"),
         help="checker 인증 토큰. 기본값: CHECKER_TOKEN 또는 validate-test-token",
     )
+    check_parser.add_argument("--vuln", help="PoC로 검증할 취약점 번호. 예: 1 또는 vuln1")
+    check_parser.add_argument("--poc", help="--vuln으로 지정한 취약점을 검증할 PoC 파일")
+    for idx in range(1, 5):
+        check_parser.add_argument(
+            f"--poc{idx}",
+            nargs="?",
+            const=f"poc{idx}.py",
+            help=f"vuln{idx} 검증용 PoC 파일. 값 생략 시 poc{idx}.py",
+        )
+    check_parser.add_argument("--poc-timeout", type=int, default=20, help="PoC 실행 제한 시간(초). 기본값: 20")
     check_parser.add_argument("--save-report", help="검증 결과 JSON 저장 경로")
     check_parser.set_defaults(func=verify)
 

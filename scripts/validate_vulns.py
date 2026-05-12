@@ -3,6 +3,7 @@
 
 팀 사용법 (제출 전 자기 서비스 검증):
   python validate_vulns.py --spec vuln_spec.json --host localhost --port 8000
+  python validate_vulns.py --spec vuln_spec.json --vuln 1 --poc poc1.py
 
 주최측 사용법 (전 팀 일괄 검증):
   python validate_vulns.py --all --spec-dir ../vuln_specs --hosts-file hosts.json
@@ -17,14 +18,17 @@
   1. service.health 확인 (미지정 시 템플릿 호환용 /health)
   2. checker.inject: 테스트 flag를 서비스에 주입
   3. checker.retrieve: flag가 서비스에 저장됐는지 확인
-  4. 공격 (vuln.attack 또는 템플릿 호환용 /chat): 응답에서 HSPACE{...} 패턴 탐지
+  4. 공격 또는 PoC 실행: 응답/stdout 마지막 줄에서 HSPACE{...} 패턴 탐지
   5. checker.basic_function: 기본 기능 동작 확인
 """
 import argparse
 import json
+import os
 import re
 import secrets
+import subprocess
 import sys
+import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -222,6 +226,184 @@ def _basic_function(host: str, port: int, basic_spec: dict) -> bool:
         return False
 
 
+def _last_non_empty_line(text: str) -> str:
+    for line in reversed(text.splitlines()):
+        stripped = line.strip()
+        if stripped:
+            return stripped
+    return ""
+
+
+def _normalize_vuln_id(value: str) -> str:
+    raw = str(value).strip().lower()
+    if raw.isdigit():
+        raw = f"vuln{raw}"
+    if raw not in {"vuln1", "vuln2", "vuln3", "vuln4"}:
+        raise ValueError("--vuln 은 1~4 또는 vuln1~vuln4 중 하나여야 합니다")
+    return raw
+
+
+def _find_vuln(spec: dict, vuln_id: str) -> dict:
+    for vuln in spec.get("vulnerabilities", []):
+        if vuln.get("id") == vuln_id:
+            return vuln
+    raise ValueError(f"vuln_spec.json에서 {vuln_id} 항목을 찾을 수 없습니다")
+
+
+def _process_text(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value)
+
+
+def _run_poc_file(
+    poc_path: Path,
+    host: str,
+    port: int,
+    target_team: str,
+    vuln_id: str,
+    timeout: int,
+) -> dict:
+    if not poc_path.exists():
+        return {
+            "timeout": False,
+            "exit_code": None,
+            "stdout": "",
+            "stderr": f"PoC 파일 없음: {poc_path}",
+        }
+
+    env = {
+        "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
+        "PYTHONUNBUFFERED": "1",
+        "TARGET_HOST": host,
+        "TARGET_PORT": str(port),
+        "TARGET_TEAM": target_team,
+        "FLAG_ID": vuln_id,
+    }
+    try:
+        with tempfile.TemporaryDirectory(prefix="poc-check-") as workdir:
+            completed = subprocess.run(
+                [sys.executable, str(poc_path.resolve())],
+                cwd=workdir,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
+        return {
+            "timeout": False,
+            "exit_code": completed.returncode,
+            "stdout": completed.stdout,
+            "stderr": completed.stderr,
+        }
+    except subprocess.TimeoutExpired as exc:
+        return {
+            "timeout": True,
+            "exit_code": None,
+            "stdout": _process_text(exc.stdout),
+            "stderr": _process_text(exc.stderr),
+        }
+
+
+def validate_poc_single(
+    spec: dict,
+    host: str,
+    port: int,
+    vuln_id: str,
+    poc_path: Path,
+    checker_token: str = CHECKER_TOKEN_DEFAULT,
+    timeout: int = 20,
+) -> dict:
+    """
+    특정 취약점 하나에 대해 실제 PoC 파일이 주입된 flag를 출력하는지 검증.
+
+    Production PoC runner와 같은 핵심 계약을 확인한다:
+    TARGET_HOST/TARGET_PORT/TARGET_TEAM/FLAG_ID 환경변수를 주고 실행한 뒤,
+    stdout의 마지막 non-empty line에 방금 주입한 flag가 있어야 PASS다.
+    """
+    vuln_id = _normalize_vuln_id(vuln_id)
+    vuln = _find_vuln(spec, vuln_id)
+    service_spec = _service_config(spec)
+    checker_spec = vuln.get("checker", {})
+    target_team = spec["team_id"]
+
+    print(f"\n  [{vuln_id}] PoC 검증")
+    print(f"    파일: {poc_path}")
+
+    result = {
+        "passed": False,
+        "vuln_id": vuln_id,
+        "poc": str(poc_path),
+        "health": False,
+        "inject": False,
+        "retrieve": False,
+        "poc_timeout": False,
+        "poc_exit_code": None,
+        "poc_flag_match": False,
+        "basic_func": False,
+        "failure": "",
+    }
+
+    health_ok, health_detail = _check_health(host, port, service_spec)
+    result["health"] = health_ok
+    if not health_ok:
+        result["failure"] = f"health 실패: {health_detail}"
+        print(f"    ✗ {result['failure']}")
+        return result
+
+    test_flag = generate_flag()
+    inject_ok = _inject_flag(host, port, checker_spec.get("inject"), test_flag, checker_token)
+    result["inject"] = inject_ok
+    if not inject_ok:
+        result["failure"] = "checker.inject 실패"
+        print(f"    ✗ {result['failure']}")
+        return result
+
+    retrieve_ok = _retrieve_flag(host, port, checker_spec.get("retrieve"), test_flag, checker_token)
+    result["retrieve"] = retrieve_ok
+    if not retrieve_ok:
+        result["failure"] = "checker.retrieve 실패"
+        print(f"    ✗ {result['failure']}")
+        return result
+
+    poc_run = _run_poc_file(poc_path, host, port, target_team, vuln_id, timeout)
+    result["poc_timeout"] = poc_run["timeout"]
+    result["poc_exit_code"] = poc_run["exit_code"]
+    if poc_run["timeout"]:
+        result["failure"] = f"PoC timeout after {timeout}s"
+        print(f"    ✗ {result['failure']}")
+        return result
+
+    final_line = _last_non_empty_line(poc_run["stdout"])
+    flags = FLAG_PATTERN.findall(final_line)
+    flag_ok = test_flag in flags
+    result["poc_flag_match"] = flag_ok
+    if not flag_ok:
+        combined_flags = FLAG_PATTERN.findall(poc_run["stdout"] + "\n" + poc_run["stderr"])
+        if test_flag in combined_flags:
+            result["failure"] = "flag는 stdout의 마지막 non-empty line에 출력해야 합니다"
+        else:
+            result["failure"] = "PoC가 주입된 flag를 출력하지 못했습니다"
+        print(f"    ✗ {result['failure']}")
+        if poc_run["stderr"]:
+            print(f"    stderr: {poc_run['stderr'][:300]}")
+        return result
+
+    basic_ok = _basic_function(host, port, checker_spec.get("basic_function"))
+    result["basic_func"] = basic_ok
+    if not basic_ok:
+        result["failure"] = "checker.basic_function 실패"
+        print(f"    ✗ {result['failure']}")
+        return result
+
+    result["passed"] = True
+    print("    ✓ PASS (PoC가 주입된 flag를 마지막 stdout 줄에 출력)")
+    return result
+
+
 def validate_single(
     spec: dict,
     host: str,
@@ -370,6 +552,29 @@ def _validate_vuln_schema(vulns: list[dict]) -> list[str]:
     return errors
 
 
+def _collect_poc_targets(args: argparse.Namespace) -> list[tuple[str, Path]]:
+    numbered: dict[str, Path] = {}
+    for idx in range(1, 5):
+        poc = getattr(args, f"poc{idx}", None)
+        if poc:
+            numbered[f"vuln{idx}"] = Path(poc)
+
+    if args.poc:
+        if not args.vuln:
+            raise ValueError("--poc 사용 시 --vuln 1~4를 함께 지정하세요")
+        vuln_id = _normalize_vuln_id(args.vuln)
+        numbered[vuln_id] = Path(args.poc)
+    elif args.vuln:
+        vuln_id = _normalize_vuln_id(args.vuln)
+        if not numbered:
+            raise ValueError("--vuln 사용 시 --poc 또는 같은 번호의 --pocN을 함께 지정하세요")
+        if vuln_id not in numbered:
+            raise ValueError(f"--vuln {args.vuln}에 대응하는 --poc{vuln_id[-1]} 옵션이 필요합니다")
+        numbered = {vuln_id: numbered[vuln_id]}
+
+    return sorted(numbered.items(), key=lambda item: item[0])
+
+
 def main():
     parser = argparse.ArgumentParser(description="AI A&D 취약점 검증 스크립트 (live-fire)")
     parser.add_argument("--spec", help="vuln_spec.json 경로 (단일 팀)")
@@ -383,10 +588,34 @@ def main():
     parser.add_argument("--save-report", metavar="PATH")
     parser.add_argument("--checker-token", default=CHECKER_TOKEN_DEFAULT,
                         help="checker.inject/retrieve 요청에 넣을 X-Checker-Token 값")
+    parser.add_argument("--vuln", help="PoC로 검증할 취약점 번호. 예: 1 또는 vuln1")
+    parser.add_argument("--poc", help="--vuln으로 지정한 취약점을 검증할 PoC 파일")
+    for idx in range(1, 5):
+        parser.add_argument(
+            f"--poc{idx}",
+            nargs="?",
+            const=f"poc{idx}.py",
+            help=f"vuln{idx} 검증용 PoC 파일. 값 생략 시 poc{idx}.py",
+        )
+    parser.add_argument("--poc-timeout", type=int, default=20, help="PoC 실행 제한 시간(초). 기본값: 20")
     args = parser.parse_args()
 
     if args.repeat < 1:
         print("ERROR: --repeat 은 1 이상")
+        sys.exit(1)
+    if args.poc_timeout < 1:
+        print("ERROR: --poc-timeout 은 1 이상")
+        sys.exit(1)
+    try:
+        poc_targets = _collect_poc_targets(args)
+    except ValueError as exc:
+        print(f"ERROR: {exc}")
+        sys.exit(1)
+    if poc_targets and args.all:
+        print("ERROR: PoC 파일 검증은 --spec 단일 검증에서만 사용할 수 있습니다")
+        sys.exit(1)
+    if poc_targets and not args.spec:
+        print("ERROR: PoC 파일 검증은 --spec 이 필요합니다")
         sys.exit(1)
 
     report = {
@@ -399,8 +628,45 @@ def main():
     # 단일 팀
     if args.spec:
         spec = load_spec(args.spec)
-        result = validate_single(spec, args.host, args.port,
-                                 repeat=args.repeat, checker_token=args.checker_token)
+        if poc_targets:
+            base_url = f"http://{args.host}:{args.port}"
+            print(f"\n{'='*55}")
+            print(f"팀: {spec['team_id']}  ({spec.get('service_description', '')})")
+            print(f"타겟: {base_url}")
+            print(f"PoC 검증: {len(poc_targets)}개")
+            print(f"{'='*55}")
+            poc_results = {}
+            for vuln_id, poc_path in poc_targets:
+                try:
+                    poc_results[vuln_id] = validate_poc_single(
+                        spec,
+                        args.host,
+                        args.port,
+                        vuln_id,
+                        poc_path,
+                        checker_token=args.checker_token,
+                        timeout=args.poc_timeout,
+                    )
+                except ValueError as exc:
+                    print(f"\n  [{vuln_id}] PoC 검증")
+                    print(f"    ✗ {exc}")
+                    poc_results[vuln_id] = {
+                        "passed": False,
+                        "vuln_id": vuln_id,
+                        "poc": str(poc_path),
+                        "health": False,
+                        "failure": str(exc),
+                    }
+            result = {
+                "passed": all(item["passed"] for item in poc_results.values()),
+                "health": all(item["health"] for item in poc_results.values()),
+                "pocs": poc_results,
+            }
+            status = "모든 PoC 검증 통과 ✓" if result["passed"] else "일부 PoC 검증 실패 ✗"
+            print(f"\n  결과: {status}")
+        else:
+            result = validate_single(spec, args.host, args.port,
+                                     repeat=args.repeat, checker_token=args.checker_token)
         report["teams"][spec["team_id"]] = result
         report["all_passed"] = result["passed"]
         if args.save_report:

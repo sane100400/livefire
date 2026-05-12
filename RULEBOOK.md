@@ -93,7 +93,7 @@ python scripts/gitctf.py login teamA --token "$TEAM_TOKEN" --coordinator http://
 서비스 폴더에서 확인한다.
 
 ```bash
-cd agent_service
+cd <서비스_폴더>
 python ../scripts/gitctf.py check
 ```
 
@@ -117,7 +117,7 @@ python ../scripts/gitctf.py push
 - 서비스가 정상 동작한다.
 - 로컬 테스트 flag나 비밀키가 git에 올라가지 않는다.
 
-기본 템플릿은 아래처럼 확인한다.
+예시 템플릿은 아래처럼 확인한다.
 
 ```bash
 cd agent_service
@@ -163,9 +163,17 @@ PoC 규칙:
 
 - Python 단일 파일
 - `TARGET_HOST`, `TARGET_PORT` 환경변수 사용
+- 필요하면 `TARGET_TEAM`, `FLAG_ID` 환경변수 사용
 - stdout의 마지막 non-empty line에 `HSPACE{...}` 출력
 - 외부 인터넷 호출 금지
 - `subprocess`, `eval`, `exec` 금지
+
+로컬에서 PoC별로 검증할 수 있다.
+
+```bash
+python ../scripts/gitctf.py check --vuln 1 --poc poc1.py
+python ../scripts/gitctf.py check --poc1 poc1.py --poc2 poc2.py --poc3 poc3.py --poc4 poc4.py
+```
 
 ---
 

@@ -22,7 +22,7 @@ curl http://localhost:9000/health
 | `http://localhost:9000` | coordinator API |
 | `http://localhost:8080` | scoreboard |
 
-팀 서비스 템플릿은 로컬에서 이렇게 확인합니다.
+예시 서비스 템플릿은 로컬에서 이렇게 확인합니다.
 
 ```bash
 cd agent_service
@@ -64,7 +64,7 @@ flowchart TD
 |---|---|
 | `coordinator` | 라운드 진행, flag 주입, LLM 프록시, PoC 실행, 점수 계산 |
 | `scoreboard` | 현재 점수와 라운드 상태 표시 |
-| `agent_service` | 팀 서비스 템플릿 |
+| `agent_service` | 자유 웹 서비스 개발용 예시 템플릿 |
 | `attack_agent` | 공격 에이전트 템플릿 |
 | `defense_agent` | 방어 에이전트 템플릿 |
 | `agent_sdk` | 에이전트가 coordinator와 통신하는 공통 SDK |
@@ -93,7 +93,14 @@ PoC는 `poc1.py`, `poc2.py`처럼 Python 단일 파일로 제출합니다.
 시스템은 제출된 PoC를 격리된 runner에서 실행하고, stdout의 마지막 non-empty line이 현재 라운드의 유효한 flag인지 확인합니다.
 
 ```bash
-TARGET_HOST=10.89.21.10 TARGET_PORT=8000 python poc1.py
+TARGET_HOST=10.89.21.10 TARGET_PORT=8000 TARGET_TEAM=teamB FLAG_ID=vuln1 python poc1.py
+```
+
+로컬에서 PoC별로 확인할 수 있습니다.
+
+```bash
+python ../scripts/gitctf.py check --vuln 1 --poc poc1.py
+python ../scripts/gitctf.py check --poc1 poc1.py --poc2 poc2.py --poc3 poc3.py --poc4 poc4.py
 ```
 
 성공 조건:
@@ -131,7 +138,7 @@ flowchart TD
 
 ## 팀 서비스 제출
 
-참가팀은 `agent_service/`를 기반으로 서비스를 만들 수 있습니다.
+참가팀은 자유롭게 웹 서비스를 만들 수 있습니다. `agent_service/`는 참고용 템플릿입니다.
 
 필수 제출물:
 
@@ -142,16 +149,15 @@ flowchart TD
 로컬 검증:
 
 ```bash
-cd agent_service
-make run
-make verify
+cd <서비스_폴더>
+python ../scripts/gitctf.py check
 ```
 
 제출:
 
 ```bash
 python scripts/gitctf.py login teamA --token <TOKEN> --coordinator http://<COORDINATOR_IP>:9000
-cd agent_service
+cd <서비스_폴더>
 python ../scripts/gitctf.py push
 ```
 
@@ -184,7 +190,7 @@ ctx.submit_poc(
 hackathon/
 ├── coordinator/          API, 라운드, scoring, checker, PoC runner
 ├── scoreboard/           정적 점수판
-├── agent_service/        팀 서비스 템플릿
+├── agent_service/        자유 웹 서비스 예시 템플릿
 ├── attack_agent/         공격 에이전트 템플릿
 ├── defense_agent/        방어 에이전트 템플릿
 ├── agent_sdk/            공통 SDK

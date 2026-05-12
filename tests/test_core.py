@@ -24,7 +24,7 @@ import db  # noqa: E402
 import checker  # noqa: E402
 import poc_runner  # noqa: E402
 import scorer  # noqa: E402
-from validate_vulns import validate_single  # noqa: E402
+from validate_vulns import validate_poc_single, validate_single  # noqa: E402
 from rotation import get_attack_targets, get_defender, get_defense_target  # noqa: E402
 
 
@@ -291,6 +291,105 @@ class CoreFlowTests(unittest.TestCase):
 
 
 class SpecDrivenServiceTests(unittest.TestCase):
+    def test_validate_poc_runs_file_against_spec_declared_service(self):
+        state: dict[str, str] = {}
+
+        class Handler(BaseHTTPRequestHandler):
+            def _json(self, code: int, body: dict) -> None:
+                raw = json.dumps(body).encode()
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+
+            def do_GET(self):
+                if self.path == "/ready":
+                    return self._json(200, {"ok": True})
+                if self.path == "/internal/check":
+                    return self._json(200, {"stored": state})
+                return self._json(404, {"error": "not found"})
+
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length", "0"))
+                data = json.loads(self.rfile.read(length) or b"{}")
+                if self.path == "/internal/seed":
+                    state[data["id"]] = data["value"]
+                    return self._json(200, {"ok": True})
+                if self.path == "/api/leak":
+                    return self._json(200, {"leak": state.get(data["id"], "")})
+                if self.path == "/api/ping":
+                    return self._json(200, {"ok": True})
+                return self._json(404, {"error": "not found"})
+
+            def log_message(self, *args):
+                pass
+
+        server = HTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            spec = {
+                "team_id": "teamX",
+                "service": {"health": {"endpoint": "/ready", "method": "GET", "expect_status": 200}},
+                "vulnerabilities": [{
+                    "id": "vuln1",
+                    "checker": {
+                        "inject": {
+                            "endpoint": "/internal/seed",
+                            "method": "POST",
+                            "body": {"id": "vuln1", "value": "{{FLAG}}"},
+                        },
+                        "retrieve": {
+                            "endpoint": "/internal/check",
+                            "method": "GET",
+                            "expect_contains": "{{FLAG}}",
+                        },
+                        "basic_function": {
+                            "endpoint": "/api/ping",
+                            "method": "POST",
+                            "body": {"ok": True},
+                            "expect_status": 200,
+                        },
+                    },
+                }],
+            }
+            with tempfile.TemporaryDirectory() as td:
+                poc = Path(td) / "poc1.py"
+                poc.write_text(textwrap.dedent("""
+                    import json
+                    import os
+                    import re
+                    import urllib.request
+
+                    body = json.dumps({"id": os.environ["FLAG_ID"]}).encode()
+                    req = urllib.request.Request(
+                        f"http://{os.environ['TARGET_HOST']}:{os.environ['TARGET_PORT']}/api/leak",
+                        data=body,
+                        headers={"Content-Type": "application/json"},
+                    )
+                    with urllib.request.urlopen(req, timeout=5) as response:
+                        text = response.read().decode()
+                    print("debug line")
+                    print(re.search(r"HSPACE\\{[a-f0-9]{32}\\}", text).group(0))
+                """))
+                with redirect_stdout(io.StringIO()):
+                    result = validate_poc_single(
+                        spec,
+                        "127.0.0.1",
+                        server.server_port,
+                        "1",
+                        poc,
+                        timeout=5,
+                    )
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+        self.assertTrue(result["passed"])
+        self.assertTrue(result["poc_flag_match"])
+
     def test_validate_vulns_uses_spec_declared_endpoints(self):
         state: dict[str, str] = {}
 

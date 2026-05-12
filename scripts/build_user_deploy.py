@@ -45,7 +45,7 @@ README = """# HSPACE LiveFire A&D Participant Package
 
 | 경로 | 용도 |
 |---|---|
-| `agent_service/` | 팀 서비스 템플릿. `Dockerfile`, `main.py`, 서비스 검증용 `vuln_spec.json` 예시 포함 |
+| `agent_service/` | 자유 웹 서비스 개발용 예시 템플릿. `Dockerfile`, `main.py`, `vuln_spec.json` 예시 포함 |
 | `attack_agent/` | 공격 에이전트 템플릿 |
 | `defense_agent/` | 방어 에이전트 템플릿 |
 | `agent_sdk/` | coordinator 연동 SDK |
@@ -57,7 +57,7 @@ README = """# HSPACE LiveFire A&D Participant Package
 ## 서비스 개발
 
 주제는 **"쓰기 싫은 사이트 만들기"**입니다. 쓸데없고 귀찮지만 실제로 실행되는 웹 서비스를 만들고, 의도된 취약점 4개를 심습니다.
-고정 필수 API는 없습니다. `vuln_spec.json`은 시스템이 취약점 4개를 확인할 때 쓰는 예시 검증 파일입니다.
+고정 필수 API는 없습니다. `agent_service/`는 참고용 템플릿이고, 실제 서비스 API는 `vuln_spec.json`에 맞춰 자유롭게 만들면 됩니다.
 
 ```bash
 cd agent_service
@@ -65,11 +65,18 @@ make run
 make verify
 ```
 
+PoC별 검증:
+
+```bash
+python ../scripts/gitctf.py check --vuln 1 --poc poc1.py
+python ../scripts/gitctf.py check --poc1 poc1.py --poc2 poc2.py --poc3 poc3.py --poc4 poc4.py
+```
+
 ## 서비스 제출
 
 ```bash
 python scripts/gitctf.py login teamA --token "$TEAM_TOKEN" --coordinator http://<COORDINATOR_IP>:9000
-cd agent_service
+cd <서비스_폴더>
 python ../scripts/gitctf.py push
 ```
 
