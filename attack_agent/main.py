@@ -189,7 +189,7 @@ def plan_scan(ctx: AgentContext, repo_info: dict, repo_context: str) -> tuple[in
                                 {
                                     "flag_id": "vuln1",
                                     "payload": "message or search text",
-                                    "path": "/chat",
+                                    "path": "/target/path",
                                     "method": "POST",
                                     "json_body": {"message": "message or search text"},
                                 }
@@ -222,8 +222,9 @@ def build_poc(
                 "role": "system",
                 "content": (
                     "You are an autonomous CTF exploit developer. Return only a single Python file. "
-                    "The script must read TARGET_HOST and TARGET_PORT, send the reproducing request, "
-                    "and print the full response so HSPACE flags appear on stdout. "
+                    "The script must read TARGET_HOST and TARGET_PORT, and may use TARGET_TEAM and FLAG_ID. "
+                    "It must send the reproducing request to the target service and print the extracted "
+                    "HSPACE{...} flag as the final non-empty stdout line. "
                     "Use only the Python standard library."
                 ),
             },

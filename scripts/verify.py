@@ -2,7 +2,7 @@
 """
 팀 서비스 취약점 자가 검증 스크립트.
 
-사용법 (agent_service/ 디렉토리에서):
+사용법 (서비스 repo 루트에서):
   python ../scripts/verify.py                          # vuln_spec.json 자동 탐지
   python ../scripts/verify.py --spec ./vuln_spec.json  # 명시적 지정
   python ../scripts/verify.py --port 8080              # 포트 변경
@@ -16,6 +16,7 @@
   5. basic_function — 정상 요청도 HTTP 200 반환 확인
 
 합격 기준: --repeat 회 모두 attack 성공 + basic_function 정상
+서비스 API는 자유롭게 만들 수 있고, 실제 요청 형식은 vuln_spec.json에 선언한다.
 """
 import argparse
 import json
@@ -449,7 +450,7 @@ def main():
 
     if spec_path is None or not spec_path.exists():
         print(f"{RED}vuln_spec.json을 찾을 수 없습니다.{RESET}")
-        print("  현재 위치가 agent_service/ 디렉토리인지 확인하거나")
+        print("  현재 위치가 서비스 repo 루트인지 확인하거나")
         print("  --spec 옵션으로 경로를 직접 지정하세요.")
         sys.exit(1)
 
