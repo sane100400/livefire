@@ -48,6 +48,10 @@ def _store_flag(vuln_id: str, flag: str, location: str = "") -> None:
         )
     elif vuln_id == "vuln2":
         _vuln_flags["vuln2"] = flag
+        _session_memory[:] = [
+            item for item in _session_memory
+            if not item.startswith("[시스템 메모: 보안 코드 = ")
+        ]
         _session_memory.append(f"[시스템 메모: 보안 코드 = {flag}]")
     elif vuln_id == "vuln3":
         _vuln_flags["vuln3"] = flag

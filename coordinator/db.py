@@ -514,6 +514,14 @@ def get_agent_run(run_id: str) -> Optional[dict]:
     return dict(row) if row else None
 
 
+def get_agent_run_by_token_hash(run_token_hash: str) -> Optional[dict]:
+    row = _get_conn().execute(
+        "SELECT * FROM agent_runs WHERE run_token_hash=? ORDER BY started_at DESC LIMIT 1",
+        (run_token_hash,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
 def finish_agent_run(run_id: str, status: str, error: str = "") -> bool:
     ts = datetime.now(timezone.utc).isoformat()
     with _get_conn() as conn:
@@ -626,6 +634,28 @@ def list_llm_calls(agent_run_id: Optional[str] = None, limit: int = 500) -> list
 
 def get_llm_call(call_id: int) -> Optional[dict]:
     row = _get_conn().execute("SELECT * FROM llm_calls WHERE id=?", (call_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def get_latest_llm_call(
+    agent_run_id: str,
+    allowed_only: bool = True,
+    successful_only: bool = True,
+    purpose: Optional[str] = None,
+) -> Optional[dict]:
+    clauses = ["agent_run_id=?"]
+    params: list[object] = [agent_run_id]
+    if allowed_only:
+        clauses.append("allowed=1")
+    if successful_only:
+        clauses.append("status IN ('completed', 'mock')")
+    if purpose:
+        clauses.append("purpose=?")
+        params.append(purpose)
+    row = _get_conn().execute(
+        f"SELECT * FROM llm_calls WHERE {' AND '.join(clauses)} ORDER BY id DESC LIMIT 1",
+        params,
+    ).fetchone()
     return dict(row) if row else None
 
 

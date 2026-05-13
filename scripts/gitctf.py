@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Participant-facing LiveFire A&D service CLI."""
+"""LiveFire A&D participant and organizer CLI."""
 from __future__ import annotations
 
 import argparse
@@ -11,6 +11,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import urllib.error
 import urllib.request
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
@@ -20,19 +21,28 @@ GITCTF_TRUSTED_BOOTSTRAP = True
 REMOTE_NAME = "organizer"
 CONFIG_PATH = Path(os.getenv("GITCTF_CONFIG", "~/.config/hspace-gitctf/config.json")).expanduser()
 UPDATE_CACHE_DIR = Path(os.getenv("GITCTF_CACHE_DIR", "~/.cache/hspace-gitctf")).expanduser()
-DEFAULT_UPDATE_URL = "https://raw.githubusercontent.com/sane100400/livefire/main/scripts/gitctf.py"
-COMMON_FLOW = """처음 쓰는 순서:
-  1. 로그인 저장
+DEFAULT_UPDATE_URL = ""
+COMMON_FLOW = """참가자 기본 흐름:
+  1. 팀 로그인 저장
      python scripts/gitctf.py login teamA --token <TEAM_TOKEN> --coordinator http://HOST:9000
 
   2. 서비스 폴더로 이동
      cd <서비스_폴더>
 
-  3. 제출 전 검증
+  3. 검증
      python ../scripts/gitctf.py check
 
   4. 제출
      python ../scripts/gitctf.py push
+
+에이전트 기본 흐름:
+  python scripts/gitctf.py agent build teamA
+  python scripts/gitctf.py agent doctor --mode attack
+
+관리자 기본 흐름:
+  python scripts/gitctf.py admin preflight --repeat 3
+  python scripts/gitctf.py admin round next
+  python scripts/gitctf.py admin status
 """
 
 
@@ -90,14 +100,14 @@ def _update_url_from_context(argv: list[str]) -> str | None:
     coordinator = _coordinator_from_argv(argv)
     if coordinator:
         return f"{coordinator.rstrip('/')}/tools/gitctf.py"
-    return DEFAULT_UPDATE_URL
+    return DEFAULT_UPDATE_URL or None
 
 
 def _looks_like_gitctf_script(source: bytes) -> bool:
     return (
         b"GITCTF_TRUSTED_BOOTSTRAP = True" in source
         and b"def main()" in source
-        and b"Participant-facing LiveFire" in source
+        and (b"LiveFire A&D participant" in source or b"Participant-facing LiveFire" in source)
     )
 
 
@@ -138,17 +148,84 @@ def _support_script(name: str) -> Path:
     return candidates[0]
 
 
+def _json_request(
+    method: str,
+    url: str,
+    *,
+    headers: dict[str, str] | None = None,
+    body: object | None = None,
+    timeout: float = 30.0,
+) -> dict:
+    raw_body = None
+    request_headers = dict(headers or {})
+    if body is not None:
+        raw_body = json.dumps(body).encode("utf-8")
+        request_headers.setdefault("Content-Type", "application/json")
+    req = urllib.request.Request(url, data=raw_body, headers=request_headers, method=method.upper())
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise SystemExit(f"HTTP {exc.code}: {detail[:500]}") from exc
+    except urllib.error.URLError as exc:
+        raise SystemExit(f"coordinator 연결 실패: {exc}") from exc
+    if not raw:
+        return {}
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return {"raw": raw}
+
+
+def _coordinator_setting(cli_value: str | None = None) -> str:
+    coordinator = cli_value or os.getenv("COORDINATOR_URL") or _load_config_quietly().get("coordinator") or "http://localhost:9000"
+    _validate_coordinator(coordinator)
+    return coordinator.rstrip("/")
+
+
+def _admin_secret(cli_value: str | None = None) -> str:
+    if cli_value:
+        return cli_value
+    if os.getenv("ADMIN_SECRET"):
+        return os.environ["ADMIN_SECRET"]
+    candidates = [
+        Path.cwd() / "coordinator" / ".env",
+        Path(__file__).resolve().parents[1] / "coordinator" / ".env",
+    ]
+    for path in candidates:
+        if not path.exists():
+            continue
+        for raw in path.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if line.startswith("ADMIN_SECRET="):
+                value = line.split("=", 1)[1].strip().strip('"').strip("'")
+                if value:
+                    return value
+    raise SystemExit("ADMIN_SECRET이 필요합니다. 환경변수로 넣거나 coordinator/.env를 확인하세요.")
+
+
+def _admin_headers(secret: str) -> dict[str, str]:
+    return {"X-Admin-Secret": secret}
+
+
 def _self_update(argv: list[str]) -> None:
-    if os.getenv("GITCTF_SELF_UPDATED") == "1" or os.getenv("GITCTF_NO_SELF_UPDATE") == "1":
+    if os.getenv("GITCTF_SELF_UPDATED") == "1":
+        return
+    subcommand = _current_subcommand(argv)
+    if os.getenv("GITCTF_NO_SELF_UPDATE") == "1":
+        if subcommand in {"push", "submit"} and os.getenv("GITCTF_ALLOW_STALE") != "1":
+            raise SystemExit("push/submit은 공식 gitctf.py 최신본 확인을 건너뛸 수 없습니다.")
         return
     if not argv or "-h" in argv or "--help" in argv:
+        return
+    if argv[0] == "admin":
         return
 
     update_url = _update_url_from_context(argv)
     if not update_url:
         return
 
-    subcommand = _current_subcommand(argv)
     require_update = os.getenv("GITCTF_REQUIRE_SELF_UPDATE") == "1" or subcommand in {"push", "submit"}
     try:
         source = _fetch_url(update_url, timeout=5.0)
@@ -507,9 +584,109 @@ def verify(args: argparse.Namespace) -> int:
     return result.returncode
 
 
+def admin_status(args: argparse.Namespace) -> int:
+    coordinator = _coordinator_setting(args.coordinator)
+    status = _json_request("GET", f"{coordinator}/status", timeout=10.0)
+    board = _json_request("GET", f"{coordinator}/scoreboard", timeout=10.0)
+    _print_section("운영 상태")
+    _print_kv("coordinator", coordinator)
+    _print_kv("round", f"{status.get('round')} / {status.get('total_rounds')}")
+    _print_kv("active", status.get("round_active"))
+    _print_section("점수")
+    for row in board.get("scores", []):
+        print(
+            f"  {row['team_id']:<5} score={row['score']:<5} "
+            f"service={row.get('service_status', 'UNKNOWN'):<7} "
+            f"turns={row.get('turns_used', 0)}/{row.get('turns_used', 0) + row.get('turns_remaining', 0)}"
+        )
+    return 0
+
+
+def admin_preflight(args: argparse.Namespace) -> int:
+    if args.admin_secret:
+        os.environ["ADMIN_SECRET"] = args.admin_secret
+    cmd = [
+        sys.executable,
+        str(_support_script("preflight_check.py")),
+        "--coordinator",
+        _coordinator_setting(args.coordinator),
+        "--port",
+        str(args.port),
+        "--repeat",
+        str(args.repeat),
+        "--report",
+        args.report,
+    ]
+    if args.hosts_file:
+        cmd.extend(["--hosts-file", args.hosts_file])
+    if args.skip_vuln:
+        cmd.append("--skip-vuln")
+    return _run(cmd, cwd=Path.cwd(), check=False).returncode
+
+
+def _start_round(coordinator: str, secret: str, force: bool) -> dict:
+    suffix = "?force=true" if force else ""
+    return _json_request(
+        "POST",
+        f"{coordinator}/admin/start-round{suffix}",
+        headers=_admin_headers(secret),
+        timeout=300.0,
+    )
+
+
+def _end_round(coordinator: str, secret: str) -> dict:
+    return _json_request(
+        "POST",
+        f"{coordinator}/admin/end-round",
+        headers=_admin_headers(secret),
+        timeout=300.0,
+    )
+
+
+def admin_round(args: argparse.Namespace) -> int:
+    coordinator = _coordinator_setting(args.coordinator)
+    secret = _admin_secret(args.admin_secret)
+    action = args.action
+    status = _json_request("GET", f"{coordinator}/status", timeout=10.0)
+
+    if action in {"end", "next"} and status.get("round_active"):
+        _print_section("라운드 종료")
+        ended = _end_round(coordinator, secret)
+        _print_kv("round", ended.get("round"))
+        _print_kv("score_changes", ended.get("score_changes"))
+    elif action == "end":
+        print("진행 중인 라운드가 없습니다.")
+        return 0
+
+    if action in {"start", "next"}:
+        _print_section("라운드 시작")
+        started = _start_round(coordinator, secret, args.force)
+        _print_kv("round", started.get("round"))
+        _print_kv("message", started.get("message"))
+        _print_kv("checker", started.get("checker"))
+    return 0
+
+
+def admin_bundle(args: argparse.Namespace) -> int:
+    cmd = [sys.executable, str(_support_script("build_user_deploy.py"))]
+    return _run(cmd, cwd=Path.cwd(), check=False).returncode
+
+
+def agent_delegate(args: argparse.Namespace) -> int:
+    if not args.agent_args:
+        print("agent 명령 예시:")
+        print("  python scripts/gitctf.py agent build teamA")
+        print("  python scripts/gitctf.py agent config teamA")
+        print("  python scripts/gitctf.py agent doctor --mode attack")
+        print("  python scripts/gitctf.py agent run attack --team teamA --target teamC --token <TOKEN> --runner-secret <RUNNER_SECRET>")
+        return 0
+    cmd = [sys.executable, str(_support_script("agent.py")), *args.agent_args]
+    return _run(cmd, cwd=Path.cwd(), check=False).returncode
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="HSPACE LiveFire A&D 참가자 CLI",
+        description="HSPACE LiveFire A&D 단일 CLI",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=COMMON_FLOW,
     )
@@ -536,7 +713,7 @@ def build_parser() -> argparse.ArgumentParser:
         description=(
             "로컬에서 실행 중인 서비스를 vuln_spec.json 기준으로 검증합니다.\n"
             "서비스는 자유롭게 만든 웹 서비스이면 됩니다. 고정 API는 vuln_spec.json에 선언합니다.\n"
-            "PoC 옵션을 주면 실제 runner처럼 poc*.py가 flag를 출력하는지도 확인합니다."
+            "PoC runner 계약 디버깅이 필요하면 --vuln 1 --poc poc.py를 추가합니다."
         ),
     )
     check_parser.add_argument("--repo", default=".", help="서비스 repo 경로. 기본값: 현재 폴더")
@@ -556,7 +733,7 @@ def build_parser() -> argparse.ArgumentParser:
             f"--poc{idx}",
             nargs="?",
             const=f"poc{idx}.py",
-            help=f"vuln{idx} 검증용 PoC 파일. 값 생략 시 poc{idx}.py",
+            help=argparse.SUPPRESS,
         )
     check_parser.add_argument("--poc-timeout", type=int, default=20, help="PoC 실행 제한 시간(초). 기본값: 20")
     check_parser.add_argument("--save-report", help="검증 결과 JSON 저장 경로")
@@ -588,6 +765,58 @@ def build_parser() -> argparse.ArgumentParser:
     push_parser.add_argument("--no-commit", action="store_true", help="자동 커밋 없이 현재 HEAD를 제출")
     push_parser.add_argument("--dry-run", action="store_true", help="커밋/remote 준비만 하고 실제 push는 하지 않음")
     push_parser.set_defaults(func=submit)
+
+    agent_parser = sub.add_parser(
+        "agent",
+        help="attack/defense agent 빌드와 로컬 디버그",
+        description=(
+            "agent helper를 gitctf.py 안에서 실행합니다.\n"
+            "예: python scripts/gitctf.py agent build teamA\n"
+            "예: python scripts/gitctf.py agent doctor --mode attack"
+        ),
+        epilog=(
+            "주요 명령:\n"
+            "  build teamA                         attack/defense 이미지 빌드\n"
+            "  config teamA                        coordinator 설정용 이미지 이름 출력\n"
+            "  doctor --mode attack                runner entrypoint 확인\n"
+            "  run attack --team teamA --target teamC --token <TOKEN> --runner-secret <RUNNER_SECRET>\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    agent_parser.add_argument("agent_args", nargs=argparse.REMAINDER, help="agent helper에 넘길 인자")
+    agent_parser.set_defaults(func=agent_delegate)
+
+    admin_parser = sub.add_parser(
+        "admin",
+        help="운영자용 상태 확인, 사전검증, 라운드 전환",
+        description="운영자가 자주 쓰는 명령을 한 곳에서 실행합니다.",
+    )
+    admin_sub = admin_parser.add_subparsers(dest="admin_command", metavar="<admin-command>")
+    admin_sub.required = True
+
+    status_parser = admin_sub.add_parser("status", help="coordinator와 점수판 상태 확인")
+    status_parser.add_argument("--coordinator", default=None, help="기본값: COORDINATOR_URL 또는 http://localhost:9000")
+    status_parser.set_defaults(func=admin_status)
+
+    preflight_parser = admin_sub.add_parser("preflight", help="행사 시작 전 전체 사전검증")
+    preflight_parser.add_argument("--coordinator", default=None, help="기본값: COORDINATOR_URL 또는 http://localhost:9000")
+    preflight_parser.add_argument("--admin-secret", default=None, help="기본값: ADMIN_SECRET 또는 coordinator/.env")
+    preflight_parser.add_argument("--hosts-file", metavar="PATH", help="팀 IP 매핑 JSON")
+    preflight_parser.add_argument("--port", type=int, default=8000, help="팀 서비스 포트. 기본값: 8000")
+    preflight_parser.add_argument("--repeat", type=int, default=3, help="취약점 반복 검증 횟수. 기본값: 3")
+    preflight_parser.add_argument("--report", default=str(Path(__file__).with_name("validation_report.json")))
+    preflight_parser.add_argument("--skip-vuln", action="store_true", help="취약점 검증 생략")
+    preflight_parser.set_defaults(func=admin_preflight)
+
+    round_parser = admin_sub.add_parser("round", help="라운드 시작/종료/다음 라운드 진행")
+    round_parser.add_argument("action", nargs="?", choices=["next", "start", "end"], default="next")
+    round_parser.add_argument("--coordinator", default=None, help="기본값: COORDINATOR_URL 또는 http://localhost:9000")
+    round_parser.add_argument("--admin-secret", default=None, help="기본값: ADMIN_SECRET 또는 coordinator/.env")
+    round_parser.add_argument("--force", action="store_true", help="preflight 미완료 상태에서도 start-round 실행")
+    round_parser.set_defaults(func=admin_round)
+
+    bundle_parser = admin_sub.add_parser("bundle", help="참가자 배포 번들 생성")
+    bundle_parser.set_defaults(func=admin_bundle)
     return parser
 
 

@@ -1,0 +1,8 @@
+{
+  "attack": {
+    "path": "attack_agent/main.py"
+  },
+  "defense": {
+    "path": "defense_agent/main.py"
+  }
+}

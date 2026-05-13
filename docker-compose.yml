@@ -1,6 +1,6 @@
 # ── 네트워크 ────────────────────────────────────────────────────────────
 # scoring-net : coordinator 전용 관리 플레인 (팀 서비스는 진입 불가)
-# target-net  : 팀 서비스 6개 (coordinator가 공격 라우팅용으로 접근)
+# target-net  : 팀 서비스 7개 (coordinator가 공격 라우팅용으로 접근)
 #
 # 공격 에이전트 컨테이너는 agent_runner.py가 docker run 으로 직접 띄우며
 # scoring-net 에만 연결 → /attack 호출 가능, 타겟 서비스 직접 접근 불가
@@ -140,4 +140,13 @@ services:
   #       ipv4_address: 10.89.21.15
   #   ports:
   #     - "8006:8000"
+  #   restart: on-failure:3
+  #
+  # teamG-service:
+  #   image: and-service-teamg:latest
+  #   networks:
+  #     target-net:
+  #       ipv4_address: 10.89.21.16
+  #   ports:
+  #     - "8007:8000"
   #   restart: on-failure:3

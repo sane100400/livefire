@@ -8,7 +8,7 @@ LOG_FILE="/tmp/and_round.log"
 echo "[1/4] 코디네이터 서버 시작..."
 cd "$COORDINATOR_DIR"
 if [ ! -f .env ]; then
-    echo "  오류: $COORDINATOR_DIR/.env 파일 없음. .env.example 참고해서 생성하세요."
+    echo "  오류: $COORDINATOR_DIR/.env 파일 없음. scripts/setup_admin_env.sh로 먼저 생성하세요."
     exit 1
 fi
 pip install -q -r requirements.txt
@@ -30,20 +30,20 @@ for i in $(seq 1 10); do
 done
 
 echo "[2/4] 사전검증 실행..."
-python "$SCRIPT_DIR/preflight_check.py" --repeat 3 || {
+python "$SCRIPT_DIR/gitctf.py" admin preflight --repeat 3 || {
     echo "  사전검증 실패. 위 오류를 해결 후 다시 실행하세요."
     exit 1
 }
 
 echo "[3/4] cron 등록..."
 # 20:00 ~ 익일 09:00, 30분마다 실행
-CRON_JOB="*/30 20-23,0-9 * * * /usr/bin/python3 $SCRIPT_DIR/advance_round.py >> $LOG_FILE 2>&1"
-(crontab -l 2>/dev/null | grep -v advance_round; echo "$CRON_JOB") | crontab -
+CRON_JOB="*/30 20-23,0-9 * * * /usr/bin/python3 $SCRIPT_DIR/gitctf.py admin round next >> $LOG_FILE 2>&1"
+(crontab -l 2>/dev/null | grep -v 'gitctf.py admin round'; echo "$CRON_JOB") | crontab -
 echo "  등록된 cron:"
-crontab -l | grep advance_round
+crontab -l | grep 'gitctf.py admin round'
 
 echo "[4/4] 라운드 1 수동 시작..."
-python "$SCRIPT_DIR/advance_round.py"
+python "$SCRIPT_DIR/gitctf.py" admin round next
 
 echo ""
 echo "완료. 스코어보드: scoreboard/index.html 브라우저로 열기"

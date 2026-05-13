@@ -1,11 +1,10 @@
 """
 이벤트 시작 전 원클릭 전체 시스템 사전검증.
+일반 운영자는 `python scripts/gitctf.py admin preflight --repeat 3`를 사용한다.
 
 사용법:
-  python preflight_check.py                         # 기본 (coordinator localhost:9000)
-  python preflight_check.py --hosts-file hosts.json  # 팀 IP 파일 지정
-  python preflight_check.py --repeat 3              # 취약점 3회 반복 검증 (권장)
-  python preflight_check.py --coordinator http://localhost:9000
+  python scripts/gitctf.py admin preflight --repeat 3
+  python scripts/gitctf.py admin preflight --hosts-file hosts.json
 
 검증 항목:
   1. coordinator /health 응답 확인

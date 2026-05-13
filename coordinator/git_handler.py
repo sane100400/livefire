@@ -10,7 +10,7 @@ raw git도 지원한다:
 
 인증: HTTP Basic Auth — username=team_id, password=TEAM_TOKEN
   - git-receive-pack (push): 팀 자신의 토큰만 허용
-  - git-upload-pack (clone/fetch): 인증 필요 없음 (공개 읽기)
+  - git-upload-pack (clone/fetch): repo 소유팀 또는 방어팀 토큰 필요
 
 FastAPI에 /git/{team_id}/* 로 마운트.
 
@@ -33,6 +33,7 @@ import hashlib
 import json
 import logging
 import os
+import secrets
 import subprocess
 import tempfile
 from pathlib import Path
@@ -49,25 +50,47 @@ logger = logging.getLogger(__name__)
 REPOS_DIR = Path(os.getenv("REPOS_DIR", Path(__file__).parent.parent / "repos"))
 CHECKER_TOKEN = os.getenv("CHECKER_TOKEN", "checker-token-changeme")
 
-# 팀별 target-net 내부 IP + 호스트 외부 노출 포트
-# docker-compose.yml의 static IP / port 배정과 반드시 일치해야 한다.
-_TEAM_NET = {
-    "teamA": {"ip": "10.89.21.10", "host_port": 8001},
-    "teamB": {"ip": "10.89.21.11", "host_port": 8002},
-    "teamC": {"ip": "10.89.21.12", "host_port": 8003},
-    "teamD": {"ip": "10.89.21.13", "host_port": 8004},
-    "teamE": {"ip": "10.89.21.14", "host_port": 8005},
-    "teamF": {"ip": "10.89.21.15", "host_port": 8006},
-}
-
 router = APIRouter(prefix="/git")
+GIT_SERVICES = {"git-upload-pack", "git-receive-pack"}
+MAX_GIT_REQUEST_BYTES = int(os.getenv("MAX_GIT_REQUEST_BYTES", str(50 * 1024 * 1024)))
+
+
+def _team_net(team_id: str) -> dict[str, object]:
+    from config import TEAM_ORDER, TEAMS
+
+    index = TEAM_ORDER.index(team_id) if team_id in TEAM_ORDER else 0
+    suffix = team_id.removeprefix("team").upper()
+    return {
+        "ip": TEAMS.get(team_id, {}).get("ip", "0.0.0.0"),
+        "host_port": int(os.getenv(f"HOST_PORT_TEAM_{suffix}", str(8001 + index))),
+    }
 
 
 # ── 인증 헬퍼 ─────────────────────────────────────────────────────────
 
-def _require_push_auth(repo_team_id: str, authorization: str | None) -> str:
+def _known_repo_team(repo_team_id: str) -> None:
+    from config import TEAM_TOKENS
+
+    if repo_team_id not in TEAM_TOKENS:
+        raise HTTPException(404, f"팀 {repo_team_id} 저장소 없음")
+
+
+def _basic_credentials(authorization: str | None) -> tuple[str, str]:
+    if not authorization or not authorization.startswith("Basic "):
+        return "", ""
+    try:
+        decoded = base64.b64decode(authorization[6:], validate=True).decode("utf-8")
+    except Exception:
+        return "", ""
+    username, sep, password = decoded.partition(":")
+    if not sep:
+        return "", ""
+    return username, password
+
+
+def _require_repo_auth(repo_team_id: str, authorization: str | None, *, write: bool) -> str:
     """
-    git push(git-receive-pack) 전용 인증.
+    git smart HTTP 인증.
 
     HTTP Basic Auth: username=team_id, password=TEAM_TOKEN
     실패 시 401 + WWW-Authenticate 헤더 반환 (git 클라이언트가 credential 재요청)
@@ -76,19 +99,12 @@ def _require_push_auth(repo_team_id: str, authorization: str | None) -> str:
 
     _UNAUTHORIZED = HTTPException(
         status_code=401,
-        detail="Git push 인증 실패",
-        headers={"WWW-Authenticate": f'Basic realm="HSPACE CTF git — {repo_team_id}"'},
+        detail="Git 인증 실패",
+        headers={"WWW-Authenticate": f'Basic realm="HSPACE CTF git {repo_team_id}"'},
     )
 
-    if not authorization or not authorization.startswith("Basic "):
-        raise _UNAUTHORIZED
-
-    try:
-        decoded = base64.b64decode(authorization[6:]).decode("utf-8")
-    except Exception:
-        raise _UNAUTHORIZED
-
-    username, _, password = decoded.partition(":")
+    _known_repo_team(repo_team_id)
+    username, password = _basic_credentials(authorization)
     defender = get_defender(repo_team_id)
     allowed_users = {repo_team_id, defender}
     if username == repo_team_id:
@@ -98,9 +114,31 @@ def _require_push_auth(repo_team_id: str, authorization: str | None) -> str:
     else:
         expected_token = ""
 
-    if not expected_token or username not in allowed_users or password != expected_token:
+    if not expected_token or username not in allowed_users or not secrets.compare_digest(password, expected_token):
+        raise _UNAUTHORIZED
+    if write and username not in allowed_users:
         raise _UNAUTHORIZED
     return username
+
+
+def _require_push_auth(repo_team_id: str, authorization: str | None) -> str:
+    return _require_repo_auth(repo_team_id, authorization, write=True)
+
+
+def _require_read_auth(repo_team_id: str, authorization: str | None) -> str:
+    return _require_repo_auth(repo_team_id, authorization, write=False)
+
+
+def _check_git_body_size(request: Request, body: bytes | None = None) -> None:
+    length = request.headers.get("content-length")
+    if length:
+        try:
+            if int(length) > MAX_GIT_REQUEST_BYTES:
+                raise HTTPException(413, f"git 요청 크기 초과 ({length} > {MAX_GIT_REQUEST_BYTES})")
+        except ValueError:
+            raise HTTPException(400, "content-length 형식 오류")
+    if body is not None and len(body) > MAX_GIT_REQUEST_BYTES:
+        raise HTTPException(413, f"git 요청 크기 초과 ({len(body)} > {MAX_GIT_REQUEST_BYTES})")
 
 
 # ── bare repo 초기화 ───────────────────────────────────────────────────
@@ -127,7 +165,7 @@ def _install_hooks(repo_path: Path, team_id: str) -> None:
     """pre-receive / post-receive 훅 스크립트 설치."""
     hooks_dir = repo_path / "hooks"
     docker_team = team_id.lower()
-    net_cfg = _TEAM_NET.get(team_id, {"ip": "0.0.0.0", "host_port": 8000})
+    net_cfg = _team_net(team_id)
     team_ip = net_cfg["ip"]
     host_port = net_cfg["host_port"]
 
@@ -145,6 +183,12 @@ PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
 while read oldrev newrev refname; do
     STATUS=$(curl -sf "$COORDINATOR_URL/status" 2>/dev/null)
     ACTIVE=$(echo "$STATUS" | python3 -c "import sys,json; print(json.load(sys.stdin).get('round_active',False))" 2>/dev/null)
+    PREFLIGHT_DONE=$(echo "$STATUS" | python3 -c "import sys,json; print(json.load(sys.stdin).get('preflight_done',False))" 2>/dev/null)
+
+    if [ "$PREFLIGHT_DONE" = "True" ] && [ "$ACTIVE" != "True" ]; then
+        echo "ERROR: 사전검증 이후에는 추가 push 불가. 운영자에게 문의하세요."
+        exit 1
+    fi
 
     # vuln_spec.json 변경 감지
     if git diff --name-only "$oldrev" "$newrev" 2>/dev/null | grep -q "vuln_spec.json"; then
@@ -309,12 +353,14 @@ async def git_info_refs(
     service: str = "",
 ):
     repo_path = _get_repo_or_404(team_id)
-    if not service:
+    if service not in GIT_SERVICES:
         raise HTTPException(400, "dumb HTTP not supported")
 
-    # push advertisement는 인증 필요 (git 클라이언트가 먼저 refs를 요청)
+    # clone/fetch/push advertisement 모두 인증 필요.
     if service == "git-receive-pack":
         _require_push_auth(team_id, request.headers.get("Authorization"))
+    else:
+        _require_read_auth(team_id, request.headers.get("Authorization"))
 
     cmd = [service, "--stateless-rpc", "--advertise-refs", str(repo_path)]
     result = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, timeout=30)
@@ -332,16 +378,19 @@ async def git_info_refs(
 
 @router.post("/{team_id}/{service}")
 async def git_service(team_id: str, service: str, request: Request):
-    if service not in ("git-upload-pack", "git-receive-pack"):
+    if service not in GIT_SERVICES:
         raise HTTPException(400, "unknown service")
 
-    # push는 팀 토큰 인증 필수
+    _check_git_body_size(request)
     push_user = None
     if service == "git-receive-pack":
         push_user = _require_push_auth(team_id, request.headers.get("Authorization"))
+    else:
+        _require_read_auth(team_id, request.headers.get("Authorization"))
 
     repo_path = _get_repo_or_404(team_id)
     body = await request.body()
+    _check_git_body_size(request, body)
 
     env = os.environ.copy()
     # Hooks run inside the coordinator process/container. Use loopback here;
@@ -436,6 +485,7 @@ async def handle_service_deployed(
 # ── 유틸 ──────────────────────────────────────────────────────────────
 
 def _get_repo_or_404(team_id: str) -> Path:
+    _known_repo_team(team_id)
     repo_path = REPOS_DIR / f"{team_id}.git"
     if not repo_path.exists():
         raise HTTPException(404, f"팀 {team_id} 저장소 없음")

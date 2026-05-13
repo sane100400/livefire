@@ -32,6 +32,9 @@ from config import (
     OPENROUTER_API_KEY, OPENROUTER_BASE_URL,
     DATA_DIR, POC_TIMEOUT_SEC, POC_MAX_BYTES, POC_OUTPUT_MAX_BYTES,
     POC_RUNNER_MODE, POC_DOCKER_NETWORK, POC_DOCKER_IMAGE, POC_HOST_DATA_DIR,
+    ALLOW_STUDENT_AGENT_RUNS, ALLOW_UNSAFE_AGENT_RUNS,
+    MAX_LLM_MESSAGES, MAX_LLM_PROMPT_BYTES, MAX_LLM_MAX_TOKENS,
+    MAX_ATTACK_REQUEST_BYTES, MAX_ATTACK_RESPONSE_BYTES,
 )
 from rotation import (
     assert_attack_allowed,
@@ -81,7 +84,7 @@ app.include_router(git_router)
 
 
 def _tool_path(name: str) -> Path:
-    if name not in {"gitctf.py", "validate_vulns.py"}:
+    if name not in {"gitctf.py", "validate_vulns.py", "agent.py"}:
         raise HTTPException(404, "tool not found")
     candidates = [
         Path(os.getenv("GITCTF_TOOLS_DIR", "/app/tools")) / name,
@@ -161,6 +164,19 @@ class LLMRequest(BaseModel):
     purpose: str = "general"
 
 
+class AgentAttackActionRequest(BaseModel):
+    payload: str = ""
+    session_id: str | None = None
+    history: list[dict] | None = None
+    path: str | None = None
+    method: str = "POST"
+    query: dict[str, Any] | None = None
+    headers: dict[str, str] | None = None
+    json_body: Any | None = None
+    data: str | None = None
+    llm_call_id: int | None = None
+
+
 class PocReviewRequest(BaseModel):
     reason: str = ""
 
@@ -171,6 +187,16 @@ class RunPocsRequest(BaseModel):
 
 
 ALLOWED_LLM_PURPOSES = {"general", "scan", "poc", "defense"}
+
+
+def _json_bytes(value: object) -> int:
+    return len(json.dumps(value, ensure_ascii=False, default=str).encode("utf-8"))
+
+
+def _require_json_size(label: str, value: object, max_bytes: int) -> None:
+    size = _json_bytes(value)
+    if size > max_bytes:
+        raise HTTPException(413, f"{label} 크기 초과 ({size} > {max_bytes})")
 
 
 def _check_llm_purpose(purpose: str) -> None:
@@ -186,6 +212,26 @@ def _check_model(model: str | None) -> None:
         return
     allowed = ", ".join(ALLOWED_MODEL_PREFIXES)
     raise HTTPException(403, f"허용되지 않은 모델: '{model}'. 허용 목록: {allowed}")
+
+
+def _check_llm_limits(req: LLMRequest) -> None:
+    if not isinstance(req.messages, list):
+        raise HTTPException(400, "messages는 list여야 함")
+    if len(req.messages) > MAX_LLM_MESSAGES:
+        raise HTTPException(413, f"messages 개수 초과 ({len(req.messages)} > {MAX_LLM_MESSAGES})")
+    if req.max_tokens < 1 or req.max_tokens > MAX_LLM_MAX_TOKENS:
+        raise HTTPException(400, f"max_tokens는 1~{MAX_LLM_MAX_TOKENS} 범위만 허용")
+    if req.temperature < 0 or req.temperature > 2:
+        raise HTTPException(400, "temperature는 0~2 범위만 허용")
+    _require_json_size(
+        "LLM prompt",
+        {
+            "messages": req.messages,
+            "temperature": req.temperature,
+            "max_tokens": req.max_tokens,
+        },
+        MAX_LLM_PROMPT_BYTES,
+    )
 
 
 def _model_allowed(model: str) -> bool:
@@ -221,6 +267,8 @@ def _hash_run_token(token: str) -> str:
 
 
 def _verify_runner_secret(secret: str | None) -> None:
+    if not RUNNER_SECRET and not ALLOW_UNSAFE_AGENT_RUNS:
+        raise HTTPException(503, "RUNNER_SECRET 미설정: 공식 agent run 생성을 차단합니다")
     if RUNNER_SECRET and not secrets.compare_digest(secret or "", RUNNER_SECRET):
         raise HTTPException(403, "runner secret 불일치")
 
@@ -263,6 +311,41 @@ def _verify_sdk_request(
     expected = _sdk_signature(run, request.method, request.url.path, timestamp)
     if not secrets.compare_digest(signature, expected):
         raise HTTPException(403, "Agent SDK 서명 불일치")
+
+
+def _bearer_token(request: Request) -> str:
+    authorization = request.headers.get("Authorization", "")
+    prefix = "Bearer "
+    if not authorization.startswith(prefix):
+        raise HTTPException(401, "Bearer agent run token 필요")
+    token = authorization[len(prefix):].strip()
+    if not token:
+        raise HTTPException(401, "Bearer agent run token 필요")
+    return token
+
+
+def _require_bearer_run(request: Request, mode: str | None = None) -> dict:
+    token = _bearer_token(request)
+    run_id = request.headers.get("X-Agent-Run-ID")
+    if run_id:
+        run = _require_run(run_id, mode=mode)
+        _verify_run_token(run, token)
+        return run
+    run = db.get_agent_run_by_token_hash(_hash_run_token(token))
+    if not run:
+        raise HTTPException(403, "agent run token 불일치")
+    if mode and run["mode"] != mode:
+        raise HTTPException(403, "agent run mode 불일치")
+    return run
+
+
+def _latest_or_requested_llm_call(agent_run_id: str, llm_call_id: int | None = None) -> dict:
+    if llm_call_id is not None:
+        return _require_llm_call(agent_run_id, llm_call_id)
+    call = db.get_latest_llm_call(agent_run_id, allowed_only=True, successful_only=True)
+    if not call:
+        raise HTTPException(403, "OpenRouter wrapper LLM 호출 기록이 없습니다")
+    return call
 
 
 def _validate_agent_run_request(req: AgentRunCreateRequest) -> None:
@@ -376,6 +459,8 @@ def create_student_agent_run(
     req: AgentRunCreateRequest,
     x_team_token: str = Header(...),
 ):
+    if not ALLOW_STUDENT_AGENT_RUNS:
+        raise HTTPException(404, "student agent run endpoint disabled")
     verify_agent_token(req.team_id, req.mode, x_team_token)
     return _create_agent_run_response(
         req,
@@ -407,6 +492,16 @@ def finish_agent_run(
     if not db.finish_agent_run(run_id, req.status, req.error):
         raise HTTPException(404, "agent run 없음")
     return {"ok": True, "agent_run_id": run_id, "status": req.status}
+
+
+@app.post("/agent/finish")
+def finish_agent_run_bearer(request: Request, req: AgentRunFinishRequest):
+    run = _require_bearer_run(request)
+    if req.status not in {"completed", "failed", "cancelled"}:
+        raise HTTPException(400, "status는 completed, failed, cancelled만 허용")
+    if not db.finish_agent_run(run["id"], req.status, req.error):
+        raise HTTPException(404, "agent run 없음")
+    return {"ok": True, "agent_run_id": run["id"], "status": req.status}
 
 
 @app.get("/agent-runs/{run_id}/target-repo.tar")
@@ -442,23 +537,33 @@ def target_repo_archive(
     )
 
 
-@app.post("/llm")
-async def llm_gateway(
-    request: Request,
-    req: LLMRequest,
-    x_team_token: str = Header(...),
-    x_agent_run_token: str | None = Header(default=None),
-    x_agent_sdk: str | None = Header(default=None),
-    x_agent_sdk_timestamp: str | None = Header(default=None),
-    x_agent_sdk_signature: str | None = Header(default=None),
-):
-    run = _require_run(req.agent_run_id)
-    verify_agent_token(run["team_id"], run["mode"], x_team_token)
-    _verify_sdk_request(
-        request, run, x_agent_run_token, x_agent_sdk,
-        x_agent_sdk_timestamp, x_agent_sdk_signature,
+@app.get("/agent/target-repo.tar")
+def target_repo_archive_bearer(request: Request):
+    run = _require_bearer_run(request, mode="attack")
+    if run["round_num"] != state.current_round:
+        raise HTTPException(400, "agent run round 불일치")
+    if not state.round_active:
+        raise HTTPException(400, "진행 중인 라운드 없음")
+    content, commit = archive_team_repo(run["target_team"])
+    return Response(
+        content=content,
+        media_type="application/x-tar",
+        headers={
+            "X-Repo-Team": run["target_team"],
+            "X-Repo-Commit": commit,
+            "Content-Disposition": f'attachment; filename="{run["target_team"]}-{commit[:12]}.tar"',
+        },
     )
+
+
+def _openrouter_extra_payload(body: dict[str, Any]) -> dict[str, Any]:
+    blocked = {"agent_run_id", "metadata", "messages", "model", "purpose", "stream"}
+    return {key: value for key, value in body.items() if key not in blocked}
+
+
+async def _perform_llm_call(req: LLMRequest, extra_payload: dict[str, Any] | None = None) -> dict:
     _check_llm_purpose(req.purpose)
+    _check_llm_limits(req)
 
     prompt_hash = _canonical_hash(
         {
@@ -500,6 +605,8 @@ async def llm_gateway(
         "temperature": req.temperature,
         "max_tokens": req.max_tokens,
     }
+    if extra_payload:
+        payload.update(extra_payload)
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
         "Content-Type": "application/json",
@@ -566,7 +673,78 @@ async def llm_gateway(
             "total_tokens": usage.get("total_tokens"),
         },
         "request_id": request_id,
+        "openrouter_response": data,
     }
+
+
+@app.post("/llm")
+async def llm_gateway(
+    request: Request,
+    req: LLMRequest,
+    x_team_token: str = Header(...),
+    x_agent_run_token: str | None = Header(default=None),
+    x_agent_sdk: str | None = Header(default=None),
+    x_agent_sdk_timestamp: str | None = Header(default=None),
+    x_agent_sdk_signature: str | None = Header(default=None),
+):
+    run = _require_run(req.agent_run_id)
+    verify_agent_token(run["team_id"], run["mode"], x_team_token)
+    _verify_sdk_request(
+        request, run, x_agent_run_token, x_agent_sdk,
+        x_agent_sdk_timestamp, x_agent_sdk_signature,
+    )
+    result = await _perform_llm_call(req)
+    result.pop("openrouter_response", None)
+    return result
+
+
+async def _openrouter_chat_completions(request: Request) -> JSONResponse:
+    run = _require_bearer_run(request)
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(400, "OpenRouter request body는 JSON object여야 함")
+    if body.get("stream"):
+        raise HTTPException(400, "stream 응답은 지원하지 않습니다")
+
+    metadata = body.get("metadata") if isinstance(body.get("metadata"), dict) else {}
+    purpose = (
+        request.headers.get("X-Agent-Purpose")
+        or metadata.get("purpose")
+        or body.get("purpose")
+        or ("defense" if run["mode"] == "defense" else "general")
+    )
+    llm_req = LLMRequest(
+        agent_run_id=run["id"],
+        model=str(body.get("model") or ""),
+        messages=body.get("messages") or [],
+        temperature=float(body.get("temperature", 0.2)),
+        max_tokens=int(body.get("max_tokens", 2048)),
+        purpose=str(purpose),
+    )
+    result = await _perform_llm_call(llm_req, extra_payload=_openrouter_extra_payload(body))
+    data = dict(result["openrouter_response"])
+    data["hspace"] = {
+        "agent_run_id": run["id"],
+        "llm_call_id": result["llm_call_id"],
+        "purpose": llm_req.purpose,
+    }
+    return JSONResponse(
+        data,
+        headers={
+            "X-Agent-Run-ID": run["id"],
+            "X-LLM-Call-ID": str(result["llm_call_id"]),
+        },
+    )
+
+
+@app.post("/openrouter/api/v1/chat/completions")
+async def openrouter_chat_completions(request: Request):
+    return await _openrouter_chat_completions(request)
+
+
+@app.post("/v1/chat/completions")
+async def openai_compatible_chat_completions(request: Request):
+    return await _openrouter_chat_completions(request)
 
 
 # ── 공격 엔드포인트 ───────────────────────────────────────────────────
@@ -589,33 +767,40 @@ def _target_response_text(data: Any, fallback: str) -> str:
     return fallback
 
 
-@app.post("/attack")
-@limiter.limit("20/minute")
-async def attack(
-    request: Request,
-    req: AttackRequest,
-    x_team_token: str = Header(...),
-    x_agent_run_token: str | None = Header(default=None),
-    x_agent_sdk: str | None = Header(default=None),
-    x_agent_sdk_timestamp: str | None = Header(default=None),
-    x_agent_sdk_signature: str | None = Header(default=None),
-):
-    verify_team_token(req.attacker_team, x_team_token)
+_BLOCKED_PROXY_HEADERS = {
+    "host",
+    "content-length",
+    "connection",
+    "transfer-encoding",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailer",
+    "upgrade",
+}
 
-    run = _require_run(
-        req.agent_run_id,
-        team_id=req.attacker_team,
-        mode="attack",
-        target_team=req.target_team,
+
+def _check_attack_request_limits(req: AttackRequest) -> None:
+    _require_json_size(
+        "attack request",
+        {
+            "payload": req.payload,
+            "session_id": req.session_id,
+            "history": req.history,
+            "path": req.path,
+            "method": req.method,
+            "query": req.query,
+            "headers": req.headers,
+            "json_body": req.json_body,
+            "data": req.data,
+        },
+        MAX_ATTACK_REQUEST_BYTES,
     )
-    _verify_sdk_request(
-        request, run, x_agent_run_token, x_agent_sdk,
-        x_agent_sdk_timestamp, x_agent_sdk_signature,
-    )
+
+
+async def _execute_attack(req: AttackRequest, run: dict, llm_call: dict) -> dict:
     if run["round_num"] != state.current_round:
         raise HTTPException(400, "agent run round 불일치")
-    llm_call = _require_llm_call(req.agent_run_id, req.llm_call_id, purpose="scan")
-
     if req.attacker_team not in TEAMS:
         raise HTTPException(400, "알 수 없는 공격팀")
     if req.target_team not in TEAMS:
@@ -626,6 +811,7 @@ async def attack(
         raise HTTPException(400, str(exc)) from exc
     if not state.round_active:
         raise HTTPException(400, "진행 중인 라운드 없음")
+    _check_attack_request_limits(req)
 
     # 타겟 서비스 SLA 상태 확인 — DOWN이면 공격 불가
     statuses = db.get_service_statuses()
@@ -641,14 +827,14 @@ async def attack(
     if method not in {"GET", "POST", "PUT", "PATCH", "DELETE"}:
         raise HTTPException(400, "method는 GET/POST/PUT/PATCH/DELETE만 허용")
     path = req.path or "/chat"
-    if not path.startswith("/") or "://" in path or ".." in path:
+    if len(path) > 512 or not path.startswith("/") or "://" in path or ".." in path or "\\" in path:
         raise HTTPException(400, "path는 target service 내부 절대경로여야 함")
     url = f"http://{target['ip']}:{target['port']}{path}"
 
     outbound_headers = {
         key: value
         for key, value in (req.headers or {}).items()
-        if key.lower() not in {"host", "content-length"}
+        if key.lower() not in _BLOCKED_PROXY_HEADERS
     }
 
     json_body = req.json_body
@@ -675,15 +861,16 @@ async def attack(
     except Exception as e:
         raise HTTPException(503, f"타겟 서비스 응답 없음: {str(e)}")
 
-    data = _decode_target_response(resp)
-    response_text = _target_response_text(data, resp.text)
+    response_truncated = len(resp.content) > MAX_ATTACK_RESPONSE_BYTES
+    response_body = resp.content[:MAX_ATTACK_RESPONSE_BYTES]
+    response_body_text = response_body.decode(resp.encoding or "utf-8", errors="replace")
+    data = None if response_truncated else _decode_target_response(resp)
+    response_text = _target_response_text(data, response_body_text)
 
     state.record_attack(req.attacker_team)
 
-    # 응답에서 flag 패턴 스캔 (공격 에이전트에게 힌트 제공)
     found_flags = scan_response_for_flags(response_text)
 
-    # 감사 로그
     request_fingerprint = json.dumps(
         {
             "method": method,
@@ -713,13 +900,64 @@ async def attack(
     return {
         "status_code": resp.status_code,
         "response": response_text,
-        "body": resp.text,
+        "body": response_body_text,
         "json": data if isinstance(data, (dict, list)) else None,
         "tool_calls": data.get("tool_calls", []) if isinstance(data, dict) else [],
         "flags_found": found_flags,
-        "hint": "발견된 flag가 재현되도록 poc*.py를 제출하세요" if found_flags else None,
+        "hint": "발견된 flag가 재현되도록 poc.py를 제출하세요" if found_flags else None,
+        "truncated": response_truncated,
         "turns_remaining": MAX_ATTACKS_ROUND - state.get_attack_count(req.attacker_team),
     }
+
+
+@app.post("/attack")
+@limiter.limit("20/minute")
+async def attack(
+    request: Request,
+    req: AttackRequest,
+    x_team_token: str = Header(...),
+    x_agent_run_token: str | None = Header(default=None),
+    x_agent_sdk: str | None = Header(default=None),
+    x_agent_sdk_timestamp: str | None = Header(default=None),
+    x_agent_sdk_signature: str | None = Header(default=None),
+):
+    verify_team_token(req.attacker_team, x_team_token)
+
+    run = _require_run(
+        req.agent_run_id,
+        team_id=req.attacker_team,
+        mode="attack",
+        target_team=req.target_team,
+    )
+    _verify_sdk_request(
+        request, run, x_agent_run_token, x_agent_sdk,
+        x_agent_sdk_timestamp, x_agent_sdk_signature,
+    )
+    llm_call = _require_llm_call(req.agent_run_id, req.llm_call_id, purpose="scan")
+    return await _execute_attack(req, run, llm_call)
+
+
+@app.post("/agent/attack")
+@limiter.limit("20/minute")
+async def agent_attack(request: Request, req: AgentAttackActionRequest):
+    run = _require_bearer_run(request, mode="attack")
+    llm_call = _latest_or_requested_llm_call(run["id"], req.llm_call_id)
+    attack_req = AttackRequest(
+        agent_run_id=run["id"],
+        llm_call_id=int(llm_call["id"]),
+        attacker_team=run["team_id"],
+        target_team=run["target_team"],
+        payload=req.payload,
+        session_id=req.session_id,
+        history=req.history,
+        path=req.path,
+        method=req.method,
+        query=req.query,
+        headers=req.headers,
+        json_body=req.json_body,
+        data=req.data,
+    )
+    return await _execute_attack(attack_req, run, llm_call)
 
 
 # ── PoC 제출/실행 ────────────────────────────────────────────────────
@@ -774,6 +1012,78 @@ def _run_pocs(round_num: int, only_poc_id: str | None = None) -> list[dict]:
     )
 
 
+def _submit_poc_content(
+    *,
+    run: dict,
+    llm_call: dict,
+    attacker_team: str,
+    target_team: str,
+    flag_id: str,
+    file_name: str,
+    content: bytes,
+    submitted_sha: str | None = None,
+) -> dict:
+    if not state.round_active:
+        raise HTTPException(400, "진행 중인 라운드 없음")
+    if run["round_num"] != state.current_round:
+        raise HTTPException(400, "agent run round 불일치")
+    if target_team not in TEAMS:
+        raise HTTPException(400, "알 수 없는 타겟팀")
+    if flag_id not in {"vuln1", "vuln2", "vuln3", "vuln4"}:
+        raise HTTPException(400, "flag_id는 vuln1~vuln4만 허용")
+    try:
+        assert_attack_allowed(attacker_team, target_team)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    actual_sha = hashlib.sha256(content).hexdigest()
+    if submitted_sha and actual_sha != submitted_sha:
+        raise HTTPException(400, "sha256 불일치")
+
+    safe_file_name = Path(file_name or "poc.py").name
+    reason = _validate_poc_static(safe_file_name, content)
+    if reason:
+        raise HTTPException(400, reason)
+
+    duplicate = db.find_poc_by_sha(attacker_team, target_team, actual_sha)
+    if duplicate:
+        run_results = _run_pocs(state.current_round, only_poc_id=duplicate["id"])
+        return {
+            "poc_id": duplicate["id"],
+            "status": "merged",
+            "canonical_poc_id": duplicate.get("canonical_poc_id") or duplicate["id"],
+            "sha256": actual_sha,
+            "run_result": run_results[0] if run_results else None,
+        }
+
+    poc_id = str(uuid4())
+    storage_dir = Path(DATA_DIR) / "pocs" / str(run["round_num"]) / poc_id
+    storage_dir.mkdir(parents=True, exist_ok=True)
+    storage_path = storage_dir / safe_file_name
+    storage_path.write_bytes(content)
+
+    poc = db.create_poc_submission(
+        poc_id=poc_id,
+        agent_run_id=run["id"],
+        llm_call_id=int(llm_call["id"]),
+        attacker_team=attacker_team,
+        target_team=target_team,
+        defender_team=get_defender(target_team),
+        flag_id=flag_id,
+        submitted_round=run["round_num"],
+        file_name=safe_file_name,
+        sha256=actual_sha,
+        storage_path=str(storage_path),
+    )
+    run_results = _run_pocs(state.current_round, only_poc_id=poc["id"])
+    return {
+        "poc_id": poc["id"],
+        "status": poc["status"],
+        "sha256": poc["sha256"],
+        "run_result": run_results[0] if run_results else None,
+    }
+
+
 @app.post("/pocs")
 async def submit_poc(
     request: Request,
@@ -798,65 +1108,49 @@ async def submit_poc(
     )
     if not state.round_active:
         raise HTTPException(400, "진행 중인 라운드 없음")
-    if run["round_num"] != state.current_round:
-        raise HTTPException(400, "agent run round 불일치")
-    if target_team not in TEAMS:
-        raise HTTPException(400, "알 수 없는 타겟팀")
-    if flag_id not in {"vuln1", "vuln2", "vuln3", "vuln4"}:
-        raise HTTPException(400, "flag_id는 vuln1~vuln4만 허용")
-    try:
-        assert_attack_allowed(attacker_team, target_team)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
-    _require_llm_call(agent_run_id, llm_call_id, purpose="poc")
-
-    content = await file.read()
-    actual_sha = hashlib.sha256(content).hexdigest()
-    if actual_sha != sha256:
-        raise HTTPException(400, "sha256 불일치")
-
-    file_name = Path(file.filename or "").name
-    reason = _validate_poc_static(file_name, content)
-    if reason:
-        raise HTTPException(400, reason)
-
-    duplicate = db.find_poc_by_sha(attacker_team, target_team, sha256)
-    if duplicate:
-        run_results = _run_pocs(state.current_round, only_poc_id=duplicate["id"])
-        return {
-            "poc_id": duplicate["id"],
-            "status": "merged",
-            "canonical_poc_id": duplicate.get("canonical_poc_id") or duplicate["id"],
-            "sha256": sha256,
-            "run_result": run_results[0] if run_results else None,
-        }
-
-    poc_id = str(uuid4())
-    storage_dir = Path(DATA_DIR) / "pocs" / str(run["round_num"]) / poc_id
-    storage_dir.mkdir(parents=True, exist_ok=True)
-    storage_path = storage_dir / file_name
-    storage_path.write_bytes(content)
-
-    poc = db.create_poc_submission(
-        poc_id=poc_id,
-        agent_run_id=agent_run_id,
-        llm_call_id=llm_call_id,
+    llm_call = _require_llm_call(agent_run_id, llm_call_id, purpose="poc")
+    content = await file.read(POC_MAX_BYTES + 1)
+    return _submit_poc_content(
+        run=run,
+        llm_call=llm_call,
         attacker_team=attacker_team,
         target_team=target_team,
-        defender_team=get_defender(target_team),
         flag_id=flag_id,
-        submitted_round=run["round_num"],
-        file_name=file_name,
-        sha256=sha256,
-        storage_path=str(storage_path),
+        file_name=file.filename or "poc.py",
+        content=content,
+        submitted_sha=sha256,
     )
-    run_results = _run_pocs(state.current_round, only_poc_id=poc["id"])
-    return {
-        "poc_id": poc["id"],
-        "status": poc["status"],
-        "sha256": poc["sha256"],
-        "run_result": run_results[0] if run_results else None,
-    }
+
+
+@app.post("/agent/pocs")
+async def submit_agent_poc(
+    request: Request,
+    flag_id: str = Form(...),
+    source: str | None = Form(default=None),
+    sha256: str | None = Form(default=None),
+    llm_call_id: int | None = Form(default=None),
+    file: UploadFile | None = File(default=None),
+):
+    run = _require_bearer_run(request, mode="attack")
+    llm_call = _latest_or_requested_llm_call(run["id"], llm_call_id)
+    if file is not None:
+        content = await file.read(POC_MAX_BYTES + 1)
+        file_name = file.filename or "poc.py"
+    elif source is not None:
+        content = source.encode("utf-8")
+        file_name = "poc.py"
+    else:
+        raise HTTPException(400, "file 또는 source가 필요합니다")
+    return _submit_poc_content(
+        run=run,
+        llm_call=llm_call,
+        attacker_team=run["team_id"],
+        target_team=run["target_team"],
+        flag_id=flag_id,
+        file_name=file_name,
+        content=content,
+        submitted_sha=sha256,
+    )
 
 
 @app.get("/admin/pocs")
@@ -912,7 +1206,7 @@ async def start_round(
     if not force and not db.get_meta().preflight_done:
         raise HTTPException(
             412,
-            "사전검증 미완료. scripts/preflight_check.py 실행 후 시도하거나 ?force=true 사용"
+            "사전검증 미완료. python scripts/gitctf.py admin preflight 실행 후 시도하거나 ?force=true 사용"
         )
 
     state.start_round(next_round)
@@ -1083,7 +1377,12 @@ def get_active_flags(x_admin_secret: str = Header(...), round_num: int | None = 
 def scoreboard():
     poc_exploit_counts = db.count_successful_pocs_by_attacker()
     service_statuses = db.get_service_statuses()
-    current_poc_results = db.list_poc_results(round_num=state.current_round, limit=200)
+    current_poc_results = []
+    for result in db.list_poc_results(round_num=state.current_round, limit=200):
+        safe_result = dict(result)
+        flags = safe_result.pop("flags", []) or []
+        safe_result["flags_found"] = len(flags)
+        current_poc_results.append(safe_result)
     return {
         "round": state.current_round,
         "round_active": state.round_active,
@@ -1111,11 +1410,13 @@ def scoreboard():
 
 @app.get("/status")
 def status():
+    meta = db.get_meta()
     return {
         "round": state.current_round,
         "round_active": state.round_active,
         "round_start_time": state.round_start_time,
         "total_rounds": TOTAL_ROUNDS,
+        "preflight_done": meta.preflight_done,
     }
 
 

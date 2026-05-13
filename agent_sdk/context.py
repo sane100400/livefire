@@ -272,8 +272,10 @@ class AgentContext:
         if dest_path.exists() and any(dest_path.iterdir()):
             raise AgentSDKError(f"destination is not empty: {dest_path}")
         dest_path.parent.mkdir(parents=True, exist_ok=True)
+        raw = f"{self.team_id}:{self.team_token}".encode("utf-8")
+        header = "Authorization: Basic " + base64.b64encode(raw).decode("ascii")
         result = subprocess.run(
-            ["git", "clone", "--depth", "1", url, str(dest_path)],
+            ["git", "-c", f"http.extraHeader={header}", "clone", "--depth", "1", url, str(dest_path)],
             capture_output=True,
             text=True,
         )
@@ -297,24 +299,57 @@ class AgentContext:
     ) -> dict:
         poc_path = Path(path)
         data = poc_path.read_bytes()
+        return self._submit_poc_bytes(
+            data,
+            file_name=poc_path.name,
+            llm_call_id=llm_call_id,
+            target_team=target_team,
+            flag_id=flag_id,
+        )
+
+    def submit_poc_source(
+        self,
+        source: str,
+        llm_call_id: int,
+        target_team: Optional[str] = None,
+        flag_id: str = "vuln1",
+        file_name: str = "poc.py",
+    ) -> dict:
+        """Submit an agent-generated PoC without requiring a local poc*.py file."""
+        return self._submit_poc_bytes(
+            source.encode("utf-8"),
+            file_name=file_name,
+            llm_call_id=llm_call_id,
+            target_team=target_team,
+            flag_id=flag_id,
+        )
+
+    def _submit_poc_bytes(
+        self,
+        data: bytes,
+        *,
+        file_name: str,
+        llm_call_id: int,
+        target_team: Optional[str],
+        flag_id: str,
+    ) -> dict:
         sha256 = hashlib.sha256(data).hexdigest()
         target = target_team or self.target_team
         url_path = "/pocs"
-        with poc_path.open("rb") as fh:
-            resp = httpx.post(
-                f"{self.coordinator_url}{url_path}",
-                headers=self._headers("POST", url_path),
-                data={
-                    "agent_run_id": self.agent_run_id,
-                    "llm_call_id": str(llm_call_id),
-                    "attacker_team": self.team_id,
-                    "target_team": target,
-                    "flag_id": flag_id,
-                    "sha256": sha256,
-                },
-                files={"file": (poc_path.name, fh, "text/x-python")},
-                timeout=30.0,
-            )
+        resp = httpx.post(
+            f"{self.coordinator_url}{url_path}",
+            headers=self._headers("POST", url_path),
+            data={
+                "agent_run_id": self.agent_run_id,
+                "llm_call_id": str(llm_call_id),
+                "attacker_team": self.team_id,
+                "target_team": target,
+                "flag_id": flag_id,
+                "sha256": sha256,
+            },
+            files={"file": (file_name, data, "text/x-python")},
+            timeout=30.0,
+        )
         if resp.status_code >= 400:
             raise AgentSDKError(f"/pocs failed: HTTP {resp.status_code} {resp.text[:300]}")
         return resp.json()

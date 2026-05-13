@@ -9,7 +9,7 @@
 | D-7 | 인프라 구성, Docker 설치, repo 설정 |
 | D-1 | 팀 토큰 생성, `.env` 작성, 팀에게 배포 |
 | D-0 20:00 | 팀 서비스 제출 마감, vuln_spec 잠금 |
-| D-0 20:00–21:00 | preflight_check 실행, 미통과 팀 지원 |
+| D-0 20:00–21:00 | `gitctf.py admin preflight` 실행, 미통과 팀 지원 |
 | D-0 21:00 | 라운드 1 시작 (cron 자동 또는 수동) |
 | D-1 07:00 | 라운드 20 종료, 최종 스코어보드 캡처 |
 
@@ -47,33 +47,25 @@ cd /opt/hackathon
 ### 2-2. 시크릿 생성 및 `.env` 작성
 
 ```bash
-cd coordinator
-cp .env.example .env
+cd /opt/hackathon
+scripts/setup_admin_env.sh
 
-# 무작위 토큰 생성 (Python)
-python3 -c "
-import secrets
-print('ADMIN_SECRET=' + secrets.token_hex(24))
-print('RUNNER_SECRET=' + secrets.token_urlsafe(32))
-for t in 'ABCDEF':
-    print(f'TOKEN_TEAM_{t}=' + secrets.token_hex(16))
-" >> .env
-
-# 팀 서비스 IP 채우기 (네트워크 배정 후)
-vim .env
-# IP_TEAM_A=192.168.1.10
-# IP_TEAM_B=192.168.1.11
-# ...
+# OpenRouter key와 팀 서비스 IP를 필요에 맞게 확인
+vim coordinator/.env
 ```
 
+`setup_admin_env.sh`는 7팀(teamA~teamG) 기준으로 `coordinator/.env`와
+`coordinator/team_tokens.tsv`를 생성한다.
+
 > **팀에게 배포**: 각 팀에게 `TOKEN_TEAM_X` 값만 전달. `ADMIN_SECRET`은 절대 공유 금지.
-> `RUNNER_SECRET`은 공식 agent 컨테이너 run 생성용이다. 참가자에게 직접 공유하지 않는다.
+> `RUNNER_SECRET`은 coordinator의 로컬 디버그/운영 보호용이다. 참가자와 agent 컨테이너에 직접 공유하지 않는다.
+> `DEFENSE_TOKEN_TEAM_X`는 공식 defense agent 컨테이너에만 주입한다. 일반 참가자용 서비스 제출 토큰과 분리한다.
 
 ### 2-3. Docker 네트워크 + 서비스 기동
 
 ```bash
 cd /opt/hackathon
-docker compose up -d
+docker compose up -d --build
 
 # 상태 확인
 docker compose ps
@@ -92,7 +84,7 @@ coordinator가 시작되면 `init_all_repos()`가 자동 실행된다.
 
 ```bash
 ls /opt/hackathon/repos/
-# teamA/  teamB/  teamC/  teamD/  teamE/  teamF/
+# teamA/  teamB/  teamC/  teamD/  teamE/  teamF/  teamG/
 ```
 
 각 팀에게 배포할 git remote URL:
@@ -107,13 +99,15 @@ http://<코디네이터IP>:9000/git/teamA
 
 ```bash
 cd /opt/hackathon
-python scripts/build_user_deploy.py
+python scripts/gitctf.py admin bundle
 # user_deploy/ 폴더만 압축해서 참가자에게 전달
 ```
 
-coordinator는 `/tools/gitctf.py`와 `/tools/validate_vulns.py`로 최신 helper를 제공한다.
-공식 `gitctf.py`는 실행 시 이 경로를 확인하고 최신본으로 재실행한다.
+coordinator는 `/tools/gitctf.py`, `/tools/validate_vulns.py`, `/tools/agent.py`로 최신 helper를 제공한다.
+참가자에게는 `gitctf.py` 하나를 기본 진입점으로 안내하고, agent 작업은 `python scripts/gitctf.py agent ...`로 실행하게 한다.
+내부 helper인 `agent.py`도 실행 시 `/tools/agent.py` 최신본을 확인하고 최신본으로 재실행한다.
 그래도 참가자 helper는 최종 신뢰 경계가 아니므로, push 수락 여부는 서버의 pre-receive와 PoC runner 검증을 기준으로 본다.
+`git-upload-pack`도 인증이 필요하므로 참가자가 다른 팀 repo를 raw git clone으로 가져갈 수 없다.
 
 ---
 
@@ -126,9 +120,17 @@ coordinator는 `/tools/gitctf.py`와 `/tools/validate_vulns.py`로 최신 helper
 토큰: <TOKEN_TEAM_A 값>
 coordinator: http://<IP>:9000
 
+# 제출 순서
+# 1. 서비스 코드 작성
+# 2. vuln1~vuln4 취약점 4개 구현
+# 3. vuln_spec.json 작성
+# 4. 서비스 실행 후 check PASS 확인
+# 5. push
+
 # 최초 제출
-python scripts/gitctf.py login teamA --token <TOKEN_TEAM_A> --coordinator http://<IP>:9000
 cd <서비스_폴더>
+python ../scripts/gitctf.py login teamA --token <TOKEN_TEAM_A> --coordinator http://<IP>:9000
+python ../scripts/gitctf.py check
 python ../scripts/gitctf.py push
 
 # 패치 (대회 중)
@@ -157,15 +159,8 @@ uvicorn main:app --port 8000 &
 # 취약점 검증 (서비스 폴더에서 실행)
 python ../scripts/gitctf.py check --repeat 3
 
-# PoC별 flag 출력 검증
-python ../scripts/gitctf.py check --vuln 1 --poc poc1.py
-python ../scripts/gitctf.py check --poc1 poc1.py --poc2 poc2.py --poc3 poc3.py --poc4 poc4.py
-
-# 또는 validate_vulns.py 직접 실행
-python ../scripts/validate_vulns.py \
-  --spec vuln_spec.json \
-  --host localhost --port 8000 \
-  --repeat 3 --checker-token validate-test-token
+# PoC runner 계약 디버깅이 필요할 때만 선택적으로 검증
+python ../scripts/gitctf.py check --vuln 1 --poc poc.py
 ```
 
 ### vuln_spec 제출 방법
@@ -182,15 +177,14 @@ cp <팀 제출 spec>.json /opt/hackathon/vuln_specs/teamA.json
 
 ## 4. 이벤트 직전 사전검증 (D-0 20:00–21:00)
 
-### 4-1. preflight_check 실행
+### 4-1. 사전검증 실행
 
 ```bash
 cd /opt/hackathon
-ADMIN_SECRET=$(grep ADMIN_SECRET coordinator/.env | cut -d= -f2) \
-  python scripts/preflight_check.py \
-    --coordinator http://localhost:9000 \
-    --repeat 3 \
-    --report /tmp/preflight_report.json
+python scripts/gitctf.py admin preflight \
+  --coordinator http://localhost:9000 \
+  --repeat 3 \
+  --report /tmp/preflight_report.json
 ```
 
 출력 예:
@@ -198,7 +192,7 @@ ADMIN_SECRET=$(grep ADMIN_SECRET coordinator/.env | cut -d= -f2) \
 [1/3] Coordinator 헬스 체크: http://localhost:9000/health
   ✓ OK — round=0, active=False
 
-[2/3] 팀 서비스 헬스 체크 (6팀)
+[2/3] 팀 서비스 헬스 체크 (7팀)
   ✓ teamA (http://192.168.1.10:8000/health)
   ✗ teamC (http://192.168.1.12:8000/health) — 연결 오류
 
@@ -222,10 +216,7 @@ ADMIN_SECRET=$(grep ADMIN_SECRET coordinator/.env | cut -d= -f2) \
 ### 4-3. 강제 시작 (일부 팀 미준비 시)
 
 ```bash
-# preflight 체크 없이 강제 시작
-curl -X POST http://localhost:9000/admin/start-round \
-  -H "X-Admin-Secret: $ADMIN_SECRET" \
-  "?force=true"
+python scripts/gitctf.py admin round start --force
 ```
 
 ---
@@ -235,36 +226,32 @@ curl -X POST http://localhost:9000/admin/start-round \
 ### 5-1. cron 등록 (라운드 자동 전환)
 
 ```bash
-# advance_round.py: 30분마다 end-round → start-round 자동 실행
+# 30분마다 end-round → start-round 자동 실행
 crontab -e
 ```
 
 추가 내용:
 ```
-0,30 21-23 * * * COORDINATOR_URL=http://localhost:9000 ADMIN_SECRET=<값> python3 /opt/hackathon/scripts/advance_round.py >> /tmp/and_round.log 2>&1
-0,30 0-7 * * * COORDINATOR_URL=http://localhost:9000 ADMIN_SECRET=<값> python3 /opt/hackathon/scripts/advance_round.py >> /tmp/and_round.log 2>&1
+0,30 21-23 * * * COORDINATOR_URL=http://localhost:9000 ADMIN_SECRET=<값> python3 /opt/hackathon/scripts/gitctf.py admin round next >> /tmp/and_round.log 2>&1
+0,30 0-7 * * * COORDINATOR_URL=http://localhost:9000 ADMIN_SECRET=<값> python3 /opt/hackathon/scripts/gitctf.py admin round next >> /tmp/and_round.log 2>&1
 ```
 
 또는 `.env`에 값이 있으면 스크립트가 자동으로 읽는다:
 ```
-0,30 20-23,0-7 * * * cd /opt/hackathon && python3 scripts/advance_round.py >> /tmp/and_round.log 2>&1
+0,30 20-23,0-7 * * * cd /opt/hackathon && python3 scripts/gitctf.py admin round next >> /tmp/and_round.log 2>&1
 ```
 
 ### 5-2. 라운드 수동 조작 (cron 장애 시)
 
 ```bash
-export ADMIN_SECRET=$(grep ADMIN_SECRET coordinator/.env | cut -d= -f2)
-
 # 현재 상태 확인
-curl http://localhost:9000/status | python3 -m json.tool
+python scripts/gitctf.py admin status
 
 # 라운드 종료
-curl -X POST http://localhost:9000/admin/end-round \
-  -H "X-Admin-Secret: $ADMIN_SECRET" | python3 -m json.tool
+python scripts/gitctf.py admin round end
 
 # 다음 라운드 시작
-curl -X POST http://localhost:9000/admin/start-round \
-  -H "X-Admin-Secret: $ADMIN_SECRET" | python3 -m json.tool
+python scripts/gitctf.py admin round start
 ```
 
 ### 5-3. 실시간 모니터링
@@ -322,11 +309,10 @@ curl -X POST http://localhost:9000/admin/service-deployed \
 
 ```bash
 # 현재 라운드 확인
-curl http://localhost:9000/status
+python scripts/gitctf.py admin status
 
 # 라운드가 active=false이고 번호가 멈춰 있으면 강제 시작
-curl -X POST "http://localhost:9000/admin/start-round?force=true" \
-  -H "X-Admin-Secret: $ADMIN_SECRET"
+python scripts/gitctf.py admin round start --force
 ```
 
 ### 부정 행위 의심
@@ -349,8 +335,7 @@ sqlite3 coordinator/game_state.db \
 
 ```bash
 # 마지막 라운드가 아직 active이면 종료
-curl -X POST http://localhost:9000/admin/end-round \
-  -H "X-Admin-Secret: $ADMIN_SECRET" | python3 -m json.tool
+python scripts/gitctf.py admin round end
 ```
 
 ### 7-2. 최종 스코어보드 캡처
@@ -411,12 +396,7 @@ hackathon/
 │   ├── main.py
 │   └── Dockerfile
 ├── scripts/
-│   ├── build_user_deploy.py 참가자 배포 번들 생성
-│   ├── gitctf.py          팀 서비스 제출 helper
-│   ├── verify.py          팀 자가검증 보조 도구
-│   ├── validate_vulns.py  주최측 일괄 검증
-│   ├── preflight_check.py 이벤트 전 사전검증
-│   └── advance_round.py   cron 라운드 전환
+│   └── gitctf.py          참가자/관리자 단일 CLI
 ├── scoreboard/
 │   └── index.html         실시간 스코어보드 UI
 ├── docker-compose.yml
@@ -431,7 +411,7 @@ hackathon/
 ### D-1 체크리스트
 - [ ] Docker, python3, git 설치 확인
 - [ ] `coordinator/.env` 작성 완료 (모든 토큰 실제 값으로 교체)
-- [ ] `docker compose up -d` 및 coordinator `/health` 응답 확인
+- [ ] `docker compose up -d --build` 및 coordinator `/health` 응답 확인
 - [ ] 팀별 토큰 배포 완료
 - [ ] git remote URL 배포 완료
 
@@ -442,7 +422,7 @@ hackathon/
 - [ ] vuln_spec 잠금 (21:00 이후 git push 시 spec 수정 자동 거부됨)
 
 ### D-0 21:00 직전 체크리스트
-- [ ] `python scripts/preflight_check.py --repeat 3` PASS 확인
+- [ ] `python scripts/gitctf.py admin preflight --repeat 3` PASS 확인
 - [ ] 스코어보드 UI 팀 화면에 표시
 - [ ] cron 등록 확인 (`crontab -l`)
 - [ ] 비상 연락 채널(Slack/Discord) 개설

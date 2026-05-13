@@ -448,7 +448,7 @@ round_result = compute_round_scores(
 | 라운드 시작 직후 첫 체크 전 공격 | 라운드 시작 체크(T+0)가 완료돼야 공격 허용. `UNKNOWN` 상태 = 공격 차단 |
 | 체크 도중 coordinator 재시작 | `asyncio.create_task`가 재생성됨. `checker_log`에서 `check_idx` 최댓값 조회해 재개 |
 | 팀이 git push로 재배포 | `handle_service_deployed()` 호출 시 즉시 단발 체크 실행 → 상태 갱신 (체크 주기와 독립) |
-| 6팀 동시 체크 시간 | 팀당 최대 40초(5+10+10+15) × 6팀 = 순차 4분. asyncio 병렬화 시 40초 이내 |
+| 7팀 동시 체크 시간 | 팀당 최대 40초(5+10+10+15) × 7팀 = 순차 약 5분. asyncio 병렬화 시 40초 이내 |
 | `checker_token` 불일치 | inject 실패 → FAULTY. 팀이 CHECKER_TOKEN을 잘못 설정한 경우 |
 | 네트워크 파티션 (coordinator↔팀) | health 타임아웃 5초 → DOWN. 재연결되면 다음 체크에서 상태 복구 |
 | 체크 중 라운드 종료 | 체크 완료 후 `round_active` 재확인. 비활성이면 checker_log 저장 안 함 |
@@ -525,7 +525,7 @@ Body: multipart/form-data, file=service.zip
 
 ### 권장
 
-이벤트 규모(6팀, 단일 서버)에서는 **대안 A**(HTTP Basic Auth)가 최소 변경으로 인증 추가 가능.  
+이벤트 규모(7팀, 단일 서버)에서는 **대안 A**(HTTP Basic Auth)가 최소 변경으로 인증 추가 가능.
 구현 포인트: `git_handler.py`의 `git_service()` 핸들러에서 `request.headers.get("Authorization")` 파싱.
 
 ```python

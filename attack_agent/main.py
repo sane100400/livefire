@@ -1,8 +1,8 @@
 """
-Attack agent template using agent_sdk.
+Attack agent template using the compatibility agent_sdk path.
 
-The agent must use the coordinator LLM gateway for both scan planning and PoC
-creation. /attack and /pocs require the LLM call id that produced the action.
+Participants may replace this with any orchestration they want. Official runs
+must still use the coordinator-provided LLM wrapper and agent PoC/attack APIs.
 """
 from __future__ import annotations
 
@@ -285,10 +285,13 @@ def main() -> None:
                     continue
 
                 poc_llm_call_id, source = build_poc(ctx, flag_id, item, result, repo_info, repo_context)
-                path = Path(f"poc_{ctx.target_team}_{flag_id}.py")
-                path.write_text(source, encoding="utf-8")
-                submitted = ctx.submit_poc(path, llm_call_id=poc_llm_call_id, flag_id=flag_id)
-                print(f"  submitted {path.name}: {submitted}")
+                submitted = ctx.submit_poc_source(
+                    source,
+                    llm_call_id=poc_llm_call_id,
+                    flag_id=flag_id,
+                    file_name="poc.py",
+                )
+                print(f"  submitted agent-generated poc.py for {flag_id}: {submitted}")
             except (AgentSDKError, ValueError, SyntaxError) as exc:
                 print(f"  probe {flag_id} failed: {exc}")
 

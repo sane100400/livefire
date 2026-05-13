@@ -5,7 +5,9 @@ WORKDIR /app
 COPY attack_agent/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY agent_sdk ./agent_sdk
-COPY attack_agent ./attack_agent
+ARG AGENT_ENTRYPOINT=""
+ENV ATTACK_AGENT_ENTRYPOINT=${AGENT_ENTRYPOINT}
 
-CMD ["python", "attack_agent/main.py"]
+COPY . .
+
+CMD ["python", "-m", "agent_sdk.runner"]

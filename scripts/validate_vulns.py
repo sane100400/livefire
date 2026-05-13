@@ -2,8 +2,8 @@
 취약점 검증 스크립트 (live-fire 방식).
 
 팀 사용법 (제출 전 자기 서비스 검증):
-  python validate_vulns.py --spec vuln_spec.json --host localhost --port 8000
-  python validate_vulns.py --spec vuln_spec.json --vuln 1 --poc poc1.py
+  python ../scripts/gitctf.py check
+  python ../scripts/gitctf.py check --vuln 1 --poc poc.py
 
 주최측 사용법 (전 팀 일괄 검증):
   python validate_vulns.py --all --spec-dir ../vuln_specs --hosts-file hosts.json

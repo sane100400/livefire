@@ -1,15 +1,14 @@
-.PHONY: run verify verify-verbose build
+.PHONY: run check verify build
 
 PORT ?= 8000
 
 run:
 	uvicorn main:app --host 0.0.0.0 --port $(PORT) --reload
 
-verify:
-	python ../scripts/verify.py --port $(PORT)
+check:
+	python ../scripts/gitctf.py check --repo . --port $(PORT)
 
-verify-verbose:
-	python ../scripts/verify.py --port $(PORT) --verbose
+verify: check
 
 build:
 	docker build -t and-service-local .

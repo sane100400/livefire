@@ -1,0 +1,145 @@
+HSPACE LiveFire Agent Usage
+
+이 파일은 참가자가 attack/defense agent를 준비할 때 보는 최소 사용법입니다.
+실제 라운드 중 agent 실행은 coordinator가 자동으로 합니다.
+attack/defense도 scripts/gitctf.py 하나로 빌드하고 디버그합니다.
+
+
+1. agent가 하는 일
+
+ATTACK AGENT
+- 다른 팀 repo를 읽습니다.
+- coordinator OpenRouter wrapper로 분석합니다.
+- /agent/attack wrapper로 대상 서비스를 탐색합니다.
+- 성공 경로를 찾으면 PoC 소스를 만들고 자동 제출합니다.
+- 참가자가 라운드 중 poc.py를 직접 제출하지 않습니다.
+
+DEFENSE AGENT
+- 배정받은 다른 팀 repo를 clone합니다.
+- coordinator OpenRouter wrapper로 패치를 만듭니다.
+- 패치를 commit하고 coordinator git repo로 push합니다.
+- commit에는 Agent-Run-ID가 자동으로 붙습니다.
+
+
+2. 우리 팀 agent 이미지 빌드
+
+프로젝트 루트에서 실행합니다.
+
+  python scripts/gitctf.py agent build teamA
+
+위 명령은 아래 두 이미지를 빌드합니다.
+
+  and-attack-teama:latest
+  and-defense-teama:latest
+
+특정 agent만 빌드할 때:
+
+  python scripts/gitctf.py agent build teamA --mode attack
+  python scripts/gitctf.py agent build teamA --mode defense
+
+
+2-1. 코드 구조를 바꿀 때
+
+runner는 agent_manifest.json을 보고 실제 실행 파일을 찾습니다.
+
+  {
+    "attack": {"path": "attack_agent/main.py"},
+    "defense": {"path": "defense_agent/main.py"}
+  }
+
+파일 위치를 바꾸면 path만 새 위치로 고치면 됩니다.
+실행 전에 runner 해석 결과를 확인할 수 있습니다.
+
+  python scripts/gitctf.py agent doctor --mode attack
+  python scripts/gitctf.py agent doctor --mode defense
+
+
+3. coordinator 설정에 넣을 이미지 이름 확인
+
+  python scripts/gitctf.py agent config teamA
+
+출력된 이름이 coordinator/config.py의 ATTACK_AGENT_IMAGES,
+DEFENSE_AGENT_IMAGES에 들어가 있어야 합니다.
+
+
+4. 실제 경기에서 실행하는 방법
+
+참가자가 직접 실행하지 않습니다.
+관리자가 라운드를 진행하면 coordinator가 자동 실행합니다.
+
+  python scripts/gitctf.py admin round next
+
+gitctf.py agent가 내부적으로 호출하는 scripts/agent.py는 coordinator 주소를 알 수 있으면 /tools/agent.py에서
+최신 공식 helper를 확인하고, 파일이 다르면 공식본으로 다시 실행합니다.
+공식 라운드는 coordinator가 1회용 AGENT_RUN_TOKEN을 만들어 agent에 주입합니다.
+RUNNER_SECRET은 로컬 디버그용으로만 쓰며 참가자에게 공유하지 않습니다.
+
+
+5. 로컬 디버그 실행
+
+공식 운영 전 테스트할 때만 사용합니다.
+이 명령은 local-debug agent run을 먼저 만들고 AGENT_RUN_TOKEN,
+OPENAI_BASE_URL, HSPACE_AGENT_BASE_URL을 환경변수로 주입한 뒤 runner를 실행합니다.
+
+ATTACK:
+
+  python scripts/gitctf.py agent run attack \
+    --team teamA \
+    --target teamC \
+    --token <TOKEN_TEAM_A> \
+    --runner-secret <RUNNER_SECRET>
+
+DEFENSE:
+
+  python scripts/gitctf.py agent run defense \
+    --team teamA \
+    --target teamG \
+    --token <DEFENSE_TOKEN_TEAM_A> \
+    --runner-secret <RUNNER_SECRET>
+
+
+6. 꼭 지킬 것
+
+- agent 오케스트레이션은 자유입니다. skill, subagent, 여러 파일 구조, 토큰 최적화 모두 가능합니다.
+- LLM 클라이언트는 주입된 OPENAI_BASE_URL 또는 OPENROUTER_BASE_URL을 사용합니다.
+- API key는 주입된 OPENAI_API_KEY 또는 OPENROUTER_API_KEY를 사용합니다. 실제 값은 AGENT_RUN_TOKEN입니다.
+- 이 base URL은 coordinator의 OpenRouter wrapper입니다. 외부 OpenRouter URL을 직접 쓰지 않습니다.
+- attack은 POST $HSPACE_AGENT_BASE_URL/attack 으로 대상 서비스를 탐색합니다.
+- PoC 제출은 POST $HSPACE_AGENT_BASE_URL/pocs 로 합니다.
+- SDK의 AgentContext는 선택사항입니다. 안 써도 됩니다.
+- 공식 라운드에서 개인 LLM API key를 직접 쓰지 않습니다.
+- 팀 토큰으로 직접 /agent-runs, /llm, /attack, /pocs를 호출하지 않습니다.
+
+
+7. 자유 오케스트레이션 최소 예시
+
+아무 OpenAI 호환 클라이언트나 아래 환경변수를 그대로 쓰면 됩니다.
+
+  OPENAI_BASE_URL=http://coordinator/openrouter/api/v1
+  OPENAI_API_KEY=<AGENT_RUN_TOKEN>
+
+Python 예시:
+
+  import os, httpx
+
+  auth = {"Authorization": "Bearer " + os.environ["OPENAI_API_KEY"]}
+  httpx.post(
+      os.environ["OPENAI_BASE_URL"] + "/chat/completions",
+      headers=auth,
+      json={
+          "model": "openai/gpt-4o-mini",
+          "messages": [{"role": "user", "content": "find a probe"}],
+      },
+  )
+
+  auth = {"Authorization": "Bearer " + os.environ["AGENT_RUN_TOKEN"]}
+  httpx.post(
+      os.environ["HSPACE_AGENT_BASE_URL"] + "/attack",
+      headers=auth,
+      json={"path": "/probe", "method": "POST", "json_body": {"q": "test"}},
+  )
+  httpx.post(
+      os.environ["HSPACE_AGENT_BASE_URL"] + "/pocs",
+      headers=auth,
+      data={"flag_id": "vuln1", "source": "print('HSPACE{...}')\n"},
+  )

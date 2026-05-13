@@ -1,0 +1,55 @@
+HSPACE LiveFire 규칙 초간단 요약
+
+1. 기본 목표
+- 7개 팀이 각각 "쓰기 싫은 사이트" 주제로 웹 서비스를 만들고 취약점 4개를 넣습니다.
+- 본선에서는 attack agent가 다른 팀 서비스를 공격하고, defense agent가 배정된 서비스를 고칩니다.
+- 점수 인정은 공식 agent run token과 coordinator wrapper를 거친 결과만 됩니다.
+
+2. 기억할 명령
+- 스크립트는 scripts/gitctf.py 하나만 기억하면 됩니다.
+
+참가자:
+  python scripts/gitctf.py login teamA --token <TEAM_TOKEN> --coordinator http://<HOST>:9000
+  python ../scripts/gitctf.py check
+  python ../scripts/gitctf.py push
+
+agent:
+  python scripts/gitctf.py agent build teamA
+  python scripts/gitctf.py agent doctor --mode attack
+
+관리자:
+  scripts/setup_admin_env.sh
+  python scripts/gitctf.py admin status
+  python scripts/gitctf.py admin preflight --repeat 3
+  python scripts/gitctf.py admin round next
+  python scripts/gitctf.py admin bundle
+
+3. 서비스 제출
+- 순서: 서비스 구현 -> 취약점 4개 심기 -> vuln_spec.json 작성 -> 서비스 실행 -> check PASS -> push
+- repo 루트에 Dockerfile, vuln_spec.json, 서비스 코드가 있어야 합니다.
+- 취약점은 vuln1~vuln4 총 4개입니다.
+- 로컬 flag, 팀 토큰, API key, 비밀키는 git에 올리면 안 됩니다.
+- 제출 전 gitctf.py check가 PASS여야 합니다.
+
+4. 공격/PoC
+- 라운드 중 사람이 poc.py를 직접 제출하지 않습니다.
+- attack agent가 /agent/attack으로 탐색하고 /agent/pocs로 PoC를 제출합니다.
+- LLM은 주입된 OPENAI_BASE_URL 또는 OPENROUTER_BASE_URL만 사용합니다.
+- 개인 LLM API key나 외부 OpenRouter 직접 호출은 금지입니다.
+- PoC는 TARGET_HOST, TARGET_PORT를 사용하고 마지막 줄에 HSPACE{...}를 출력해야 합니다.
+
+5. 방어
+- defense agent만 방어 패치를 제출합니다.
+- 방어 commit에는 Agent-Run-ID가 있어야 합니다.
+- 취약점을 막되 서비스 정상 기능을 깨면 안 됩니다.
+
+6. 점수
+- PoC 성공: 공격팀 +10, 방어팀 -10
+- 서비스 OK: 서비스 소유팀 +10
+- PoC 실패 또는 서비스 DOWN: 추가 점수 없음
+
+7. 금지
+- coordinator, scoreboard, Docker host 공격 금지
+- 다른 팀 DoS, 토큰 탈취, flag/PoC 공유 금지
+- 공식 token 없이 /attack, /pocs 직접 호출 금지
+- 다른 팀 repo를 raw git clone/fetch로 가져가기 금지

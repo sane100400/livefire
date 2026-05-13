@@ -7,7 +7,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /
 COPY defense_agent/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY agent_sdk ./agent_sdk
-COPY defense_agent ./defense_agent
+ARG AGENT_ENTRYPOINT=""
+ENV DEFENSE_AGENT_ENTRYPOINT=${AGENT_ENTRYPOINT}
 
-CMD ["python", "defense_agent/main.py"]
+COPY . .
+
+CMD ["python", "-m", "agent_sdk.runner"]

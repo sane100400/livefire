@@ -9,25 +9,31 @@
   MODE             attack
   TARGET_TEAM      이번 agent run의 타겟 팀
   TEAM_TOKEN       /attack 호출 시 X-Team-Token 헤더에 사용할 인증 토큰
-  RUNNER_SECRET    공식 agent run 생성용 secret (운영 환경에서만 설정)
+  AGENT_RUN_ID     coordinator가 미리 생성한 1회 실행 ID
+  AGENT_RUN_TOKEN  해당 실행에만 유효한 bearer token
+  OPENAI_BASE_URL  OpenAI-compatible wrapper URL
+  OPENAI_API_KEY   AGENT_RUN_TOKEN과 같은 값
   ROUND            현재 라운드 번호
   TARGETS          허용 공격 대상 JSON {"teamC": {"ip": ..., "port": ..., "name": ...}, ...}
-  TARGET_REPO_URL  타겟 팀 git smart HTTP URL (읽기 공개)
+  TARGET_REPO_URL  타겟 팀 git smart HTTP URL (SDK가 임시 Basic Auth 헤더 사용)
 """
+import hashlib
 import json
 import logging
 import os
+import secrets
 import subprocess
 from pathlib import Path
 from typing import Dict
+from uuid import uuid4
 
+import db
 from rotation import get_attack_targets, get_defense_target
 
 logger = logging.getLogger(__name__)
 
 # Docker 네트워크: docker-compose.yml의 scoring-net 이름
 ATTACK_DOCKER_NETWORK = os.getenv("ATTACK_DOCKER_NETWORK", "hackathon_scoring-net")
-RUNNER_SECRET = os.getenv("RUNNER_SECRET", "")
 AGENT_LOG_DIR = Path(os.getenv(
     "AGENT_LOG_DIR",
     str(Path(__file__).parent.parent / "data" / "agent_logs"),
@@ -36,6 +42,31 @@ AGENT_LOG_DIR = Path(os.getenv(
 # 라운드별 실행 중인 컨테이너 추적 (cleanup용)
 # key: (team_id, round_num), value: Popen
 _running: Dict[tuple, subprocess.Popen] = {}
+
+
+def _hash_run_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _create_official_run(
+    *,
+    team_id: str,
+    target_team: str,
+    mode: str,
+    round_num: int,
+    image: str,
+) -> tuple[str, str]:
+    run_token = secrets.token_urlsafe(32)
+    run = db.create_agent_run(
+        run_id=str(uuid4()),
+        team_id=team_id,
+        mode=mode,
+        target_team=target_team,
+        round_num=round_num,
+        run_token_hash=_hash_run_token(run_token),
+        agent_image=image,
+    )
+    return run["id"], run_token
 
 
 def _run_agent_container(
@@ -49,6 +80,14 @@ def _run_agent_container(
     image: str,
     targets: dict,
 ) -> subprocess.Popen | None:
+    run_id, run_token = _create_official_run(
+        team_id=team_id,
+        target_team=target_team,
+        mode=mode,
+        round_num=round_num,
+        image=image,
+    )
+    openrouter_wrapper = f"{coordinator_url.rstrip('/')}/openrouter/api/v1"
     cmd = [
         "docker", "run", "--rm",
         "--network", ATTACK_DOCKER_NETWORK,
@@ -60,13 +99,18 @@ def _run_agent_container(
         "-e", f"MODE={mode}",
         "-e", f"TARGET_TEAM={target_team}",
         "-e", f"TEAM_TOKEN={token}",
+        "-e", f"AGENT_RUN_ID={run_id}",
+        "-e", f"AGENT_RUN_TOKEN={run_token}",
+        "-e", f"OPENAI_BASE_URL={openrouter_wrapper}",
+        "-e", f"OPENAI_API_KEY={run_token}",
+        "-e", f"OPENROUTER_BASE_URL={openrouter_wrapper}",
+        "-e", f"OPENROUTER_API_KEY={run_token}",
+        "-e", f"HSPACE_AGENT_BASE_URL={coordinator_url.rstrip('/')}/agent",
         "-e", f"ROUND={round_num}",
         "-e", f"TARGETS={json.dumps(targets, ensure_ascii=False)}",
         "-e", f"TARGET_REPO_URL={coordinator_url.rstrip('/')}/git/{target_team}",
         image,
     ]
-    if RUNNER_SECRET:
-        cmd[-1:-1] = ["-e", f"RUNNER_SECRET={RUNNER_SECRET}"]
 
     try:
         AGENT_LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -95,6 +139,7 @@ def _run_agent_container(
         logger.error("'docker' 명령어를 찾을 수 없음 — Docker 설치 여부 확인")
     except Exception as exc:
         logger.error("%s→%s %s 에이전트 실행 실패: %s", team_id, target_team, mode, exc)
+    db.finish_agent_run(run_id, "failed", "agent container failed to start")
     return None
 
 

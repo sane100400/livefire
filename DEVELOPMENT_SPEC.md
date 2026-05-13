@@ -10,8 +10,8 @@
 - 공격과 방어 산출물은 반드시 팀 AI 에이전트가 만든 것으로 증명되어야 한다.
 - 개발 과정에서는 외부 LLM, IDE AI, 오케스트레이션 LLM 사용을 허용한다.
 - 공식 라운드 중 점수와 연결되는 attack/defense agent 실행은 OpenRouter 화이트리스트 저성능 모델만 사용한다.
-- 팀은 OpenRouter API key를 직접 받지 않고, coordinator의 `/llm` gateway만 사용한다.
-- 공격 에이전트가 제출한 `poc*.py`는 정적 검증을 통과하면 매 라운드 1회 실행된다.
+- 팀은 OpenRouter API key를 직접 받지 않고, coordinator의 OpenRouter 호환 wrapper만 사용한다.
+- 공격 에이전트가 제출한 `poc.py` 소스는 정적 검증을 통과하면 매 라운드 1회 실행된다.
 - PoC가 해당 라운드에 flag를 탈취하면 공격팀 +10, 방어팀 -10을 기록한다.
 - 같은 flag라도 새 PoC가 다음 라운드에 성공하면 다시 점수를 준다.
 
@@ -32,7 +32,7 @@
 | agent run | attack 또는 defense agent 컨테이너의 1회 실행 |
 | SDK-issued run id | Agent SDK가 자동으로 발급·전달하는 내부 실행 ID |
 | agent run token | run 생성 시 coordinator가 발급하는 per-run bearer token. run id만 아는 직접 호출을 차단한다. |
-| SDK signature | Agent SDK가 method, path, run id, timestamp를 run token hash로 HMAC 서명한 헤더. 공식 산출물 API는 이 서명이 있어야 한다. |
+| SDK signature | Agent SDK가 method, path, run id, timestamp를 run token hash로 HMAC 서명한 헤더. legacy SDK API는 이 서명이 있어야 한다. 자유 agent용 `/agent/*` wrapper는 Bearer run token을 사용한다. |
 | runner secret | 운영자가 공식 agent launcher에만 주입하는 secret. 운영 환경에서는 `/agent-runs` 생성에 필요하다. |
 | PoC | 하나의 flag 탈취를 재현하는 Python 단일 파일 |
 | submitted PoC | 정적 검증을 통과해 매 라운드 실행 대상이 된 PoC |
@@ -45,9 +45,9 @@ FastAPI 서버. 다음 책임을 가진다.
 
 - 팀 토큰 인증
 - `/agent-runs` 생성 및 종료 기록
-- `/llm` OpenRouter gateway
-- `/attack` 탐색 proxy 및 rate limit
-- `/pocs` PoC 제출, 정적 검증, 실행 상태 관리
+- `/llm` legacy gateway 및 OpenAI/OpenRouter 호환 wrapper
+- `/attack` legacy 탐색 proxy, `/agent/attack` wrapper 및 rate limit
+- `/pocs` legacy 제출, `/agent/pocs` wrapper, 정적 검증, 실행 상태 관리
 - PoC runner 실행 및 결과 채점
 - git smart HTTP 수신, 방어 패치 provenance 검증
 - flag 생성, 주입, 만료
@@ -55,9 +55,9 @@ FastAPI 서버. 다음 책임을 가진다.
 
 ### agent_sdk
 
-팀이 직접 run id나 audit 필드를 만지지 않게 하는 공통 Python SDK.
+팀이 직접 run id나 audit 필드를 만지지 않게 하는 호환용 Python SDK. 자유 agent는 이 SDK 없이 wrapper API를 직접 호출할 수 있다.
 
-필수 인터페이스:
+호환 인터페이스:
 
 ```python
 from agent_sdk import AgentContext
@@ -68,7 +68,7 @@ scan = ctx.llm(model="openai/gpt-4o-mini", messages=[...], purpose="scan")
 ctx.attack("payload", llm_call_id=scan["llm_call_id"], target_team="teamC")
 ctx.request_target("/api/search", method="POST", json_body={"q": "payload"}, llm_call_id=scan["llm_call_id"])
 poc = ctx.llm(model="openai/gpt-4o-mini", messages=[...], purpose="poc")
-ctx.submit_poc("poc1.py", llm_call_id=poc["llm_call_id"], target_team="teamC", flag_id="vuln2")
+ctx.submit_poc_source(poc_source, llm_call_id=poc["llm_call_id"], target_team="teamC", flag_id="vuln2")
 ctx.commit_patch("patch vuln2")
 ```
 
@@ -76,10 +76,12 @@ SDK 책임:
 
 - 컨테이너 시작 시 `/agent-runs` 자동 생성
 - `RUNNER_SECRET`이 환경에 있으면 `/agent-runs` 생성 시 `X-Runner-Secret` 헤더로 전달
+- 공식 라운드에서는 coordinator가 run/token을 미리 만들고 agent 컨테이너에는 `AGENT_RUN_ID`/`AGENT_RUN_TOKEN`만 주입한다.
+- `RUNNER_SECRET`은 untrusted agent 컨테이너에 주입하지 않는다.
 - `/agent-runs` 응답의 `agent_run_token`을 저장하고 이후 API 호출에 `X-Agent-Run-Token`과 SDK HMAC 서명 헤더를 전달
 - `TEAM_ID`, `MODE`, `TARGET_TEAM`, `ROUND`, `COORDINATOR_URL`, `TEAM_TOKEN` env 로드
 - attack mode에서 target repo snapshot을 `/agent-runs/{id}/target-repo.tar`로 가져온다.
-- `/llm` 호출 시 내부 run id 자동 첨부
+- `/llm` 또는 OpenRouter 호환 wrapper 호출 시 내부 run id 자동 첨부
 - `/pocs` 업로드 시 내부 run id와 파일 sha256 자동 첨부
 - defense mode에서 git commit trailer `Agent-Run-ID: <id>` 자동 삽입
 - 실패 시 사람이 읽을 수 있는 에러 출력
@@ -94,15 +96,38 @@ SDK 책임:
 - `push`/`submit`은 최신본 확인 실패 시 기본적으로 중단한다. 긴급 오프라인 상황은 `GITCTF_ALLOW_STALE=1`로만 우회한다.
 - 서버의 git pre-receive, Docker build, `vuln_spec.json` 잠금, defense provenance, PoC runner 검증이 최종 보안 기준이다.
 
+### agent.py
+
+attack/defense agent 빌드와 로컬 디버그를 합친 단일 helper. 클라이언트 파일은 조작 가능하므로 신뢰 경계가 아니다.
+사용자-facing 진입점은 `python scripts/gitctf.py agent ...`이고, 이 명령이 `agent.py`를 호출한다.
+
+- `build`는 팀별 attack/defense Docker image를 만든다.
+- `config`는 coordinator 설정에 넣을 image 이름을 출력한다.
+- `run`은 attack/defense agent를 로컬에서 디버그 실행한다.
+- `doctor`는 runner가 실제로 실행할 entrypoint를 출력한다.
+- coordinator 주소를 알 수 있으면 `/tools/agent.py`에서 최신 공식 helper를 확인한다.
+- 현재 파일과 다르면 최신본을 로컬 캐시에 저장하고 `os.execve()`로 재실행한다.
+- `run`은 최신본 확인 실패 시 기본적으로 중단한다. 긴급 로컬 디버그만 `AGENT_HELPER_ALLOW_STALE=1`로 우회한다.
+- 공식 라운드의 신뢰 기준은 helper 파일이 아니라 `RUNNER_SECRET`, run token, OpenRouter wrapper audit, defense provenance, PoC runner 검증이다.
+
+### agent_sdk.runner
+
+컨테이너와 로컬 디버그가 모두 쓰는 agent entrypoint 호환 계층.
+
+- coordinator runner와 `scripts/gitctf.py agent run`은 직접 `attack_agent/main.py`를 실행하지 않고 `python -m agent_sdk.runner`를 실행한다.
+- 우선순위는 `{MODE}_AGENT_ENTRYPOINT`, `AGENT_ENTRYPOINT`, `agent_manifest.json`, 기본 `{mode}_agent/main.py` 순서다.
+- manifest는 `path`, `module`, `cmd`, `cwd` 형식을 지원한다.
+- 사용자가 agent 코드 위치를 바꿔도 Dockerfile/runner 계약은 유지하고 manifest만 갱신하면 된다.
+
 ### attack_agent
 
 팀 공격 에이전트 템플릿.
 
-- SDK를 사용해 배정된 target repo를 분석하고 live service를 탐색한다.
-- `/attack` proxy로 target service에 접근한다.
-- LLM 호출은 반드시 `ctx.llm()`만 사용한다.
-- scan은 `purpose=scan`, PoC 생성은 `purpose=poc` LLM call id를 남긴다.
-- 발견한 공격 경로를 `poc*.py`로 저장하고 `ctx.submit_poc(..., llm_call_id=...)`로 제출한다.
+- 배정된 target repo를 분석하고 live service를 탐색한다.
+- OpenAI/OpenRouter 호환 wrapper로 LLM을 호출한다. `ctx.llm()`은 legacy 호환 경로다.
+- `/agent/attack` wrapper로 target service에 접근한다. `agent_sdk` 사용 시 legacy `/attack`도 가능하다.
+- wrapper는 LLM call id를 자동 기록하고, `/agent/attack`과 `/agent/pocs`는 최신 성공 LLM 호출을 자동 연결한다.
+- 발견한 공격 경로를 PoC 소스로 재현하고 `/agent/pocs` wrapper 또는 `ctx.submit_poc_source(...)`로 제출한다.
 - PoC 파일은 runner에서 독립 실행 가능해야 한다.
 
 ### defense_agent
@@ -113,7 +138,7 @@ SDK 책임:
 - SDK를 사용해 취약점/PoC 결과/서비스 로그를 분석한다.
 - 패치를 만든 뒤 `ctx.commit_patch()` 또는 제공 git wrapper로 커밋한다.
 - SDK가 자동 삽입한 `Agent-Run-ID` trailer가 없는 push는 coordinator에서 거부된다.
-- 운영 환경에서는 coordinator가 defense agent 컨테이너를 실행하고 `RUNNER_SECRET`을 주입한다.
+- 운영 환경에서는 coordinator가 defense agent 컨테이너를 실행하고 1회용 run token만 주입한다.
 
 ### poc_runner
 
@@ -134,8 +159,9 @@ SDK 책임:
 
 ### POST /agent-runs
 
-Agent SDK/runner만 호출한다. 운영 환경에서 `RUNNER_SECRET`이 설정되어 있으면
-`X-Runner-Secret` 헤더가 일치해야 한다.
+Agent SDK/runner만 호출한다. `RUNNER_SECRET`이 설정되어 있지 않으면 기본적으로
+run 생성을 거부한다. 로컬 개발에서만 `ALLOW_UNSAFE_AGENT_RUNS=1`로 우회할 수 있다.
+브라우저/참가자용 `/student/agent-runs`는 기본 비활성화이며, 운영에서 켜지 않는다.
 
 Headers:
 
@@ -175,7 +201,16 @@ Rules:
 - attack run은 자기 팀과 자기 방어 대상 사이트를 target으로 둘 수 없다.
 - defense run은 시계 방향으로 배정된 사이트만 target으로 둘 수 있다.
 - 라운드 중복 실행 정책은 mode별로 둔다. MVP는 팀·mode·target·round당 여러 run 허용, dashboard에서 모두 표시한다.
-- 이후 `/llm`, `/attack`, `/pocs`, `/agent-runs/{id}/finish`, `/agent-runs/{id}/target-repo.tar` 호출은 `X-Agent-Run-Token`과 SDK HMAC 서명이 일치해야 한다.
+- 이후 legacy `/llm`, `/attack`, `/pocs`, `/agent-runs/{id}/finish`, `/agent-runs/{id}/target-repo.tar` 호출은 `X-Agent-Run-Token`과 SDK HMAC 서명이 일치해야 한다.
+- `/llm`은 message 개수, prompt byte 크기, `max_tokens` 상한을 서버에서 제한한다.
+- `/attack`은 요청/응답 크기와 proxy header를 제한한다.
+
+### Git Smart HTTP
+
+- `git-upload-pack`과 `git-receive-pack`만 허용한다.
+- clone/fetch도 Basic Auth가 필요하다. repo 소유팀 또는 해당 repo의 방어팀만 읽을 수 있다.
+- push 요청 body는 `MAX_GIT_REQUEST_BYTES` 이하만 받는다.
+- `preflight_done=true` 이후에는 라운드가 inactive여도 추가 push를 거부한다. 라운드 중 defense patch는 `Agent-Run-ID` provenance 검증을 통과해야 한다.
 
 ### POST /agent-runs/{id}/finish
 
@@ -192,7 +227,7 @@ Request:
 
 ### POST /llm
 
-OpenRouter gateway. 팀 에이전트는 OpenRouter를 직접 호출하지 않는다.
+Legacy SDK 호환 OpenRouter gateway. 팀 에이전트는 외부 OpenRouter를 직접 호출하지 않는다.
 
 Request:
 
@@ -229,9 +264,39 @@ Rules:
 - `X-Agent-Run-Token`과 SDK HMAC 서명이 해당 `agent_run_id`에 발급된 token과 일치해야 한다.
 - request/response 원문은 기본 저장하지 않는다. hash, token usage, model, timestamp만 저장한다.
 - 디버그 모드는 admin 설정으로만 원문 일부 저장 가능하게 한다.
-- `/attack`은 `purpose=scan` LLM call id를 요구한다.
-- `/pocs`는 `purpose=poc` LLM call id를 요구한다.
-- `/llm` 호출이 0회이거나 목적이 맞지 않는 run에서 나온 PoC/patch는 reject한다.
+- legacy `/attack`은 `purpose=scan` LLM call id를 요구한다.
+- legacy `/pocs`는 `purpose=poc` LLM call id를 요구한다.
+- OpenAI/OpenRouter wrapper 경로는 `/agent/attack`, `/agent/pocs`가 같은 run의 최신 성공 LLM 호출을 자동 연결한다.
+- LLM 호출이 0회인 run에서 나온 PoC/patch는 reject한다.
+
+### POST /openrouter/api/v1/chat/completions
+
+OpenAI/OpenRouter 호환 wrapper. 사용자는 LangChain, OpenAI SDK, 직접 subagent runner 등
+원하는 agent 오케스트레이션을 자유롭게 쓰되 base URL만 이 경로로 설정한다.
+
+Headers:
+
+```http
+Authorization: Bearer <AGENT_RUN_TOKEN>
+X-Agent-Purpose: scan | poc | defense | general  # 선택
+```
+
+Rules:
+
+- `OPENAI_BASE_URL`과 `OPENROUTER_BASE_URL`은 agent 컨테이너에 이 wrapper URL로 주입된다.
+- `OPENAI_API_KEY`와 `OPENROUTER_API_KEY`는 실제 OpenRouter key가 아니라 `AGENT_RUN_TOKEN`이다.
+- wrapper는 OpenRouter에 실제 요청을 전달하고, 응답 header `X-LLM-Call-ID`와 JSON `hspace.llm_call_id`를 추가한다.
+- `/agent/attack`, `/agent/pocs`는 `llm_call_id`를 직접 받지 않아도 해당 run의 최신 wrapper LLM 호출을 자동 연결한다.
+
+### POST /agent/attack
+
+자유 agent용 탐색 proxy. `AGENT_RUN_TOKEN` Bearer 인증만 필요하고 SDK HMAC은 필요 없다.
+대상 팀은 agent run에 배정된 target으로 고정된다.
+
+### POST /agent/pocs
+
+자유 agent용 PoC 제출 wrapper. `source` form field 또는 `file` multipart를 받는다.
+`sha256`과 `llm_call_id`는 선택사항이다. 생략하면 서버가 sha256을 계산하고 최신 wrapper LLM 호출을 연결한다.
 
 ### POST /attack
 
@@ -289,7 +354,7 @@ Submit rules:
 - agent run이 존재해야 한다.
 - run의 team/mode/target/round가 제출값과 맞아야 한다.
 - `X-Agent-Run-Token`과 SDK HMAC 서명이 해당 run에 발급된 token과 일치해야 한다.
-- 해당 run에 `purpose=poc`인 whitelist `/llm` 호출이 있어야 한다.
+- legacy `/pocs`는 해당 run에 `purpose=poc`인 whitelist `/llm` 호출이 있어야 한다. `/agent/pocs` wrapper는 같은 run의 최신 성공 wrapper LLM 호출을 자동 연결한다.
 - 파일명은 `poc*.py`, 크기는 MVP 기준 64KB 이하.
 - 금지 import 또는 위험 syscall 패턴은 1차 정적 검사에서 reject한다.
 - sha256이 완전히 같으면 기존 PoC로 merge한다.
@@ -437,13 +502,13 @@ Defense patch push는 `mode='defense_patch'`, `agent_run_id` 필수다.
 팀 순서는 config에 고정한다.
 
 ```text
-teamA -> teamB -> teamC -> teamD -> teamE -> teamF -> teamA
+teamA -> teamB -> teamC -> teamD -> teamE -> teamF -> teamG -> teamA
 ```
 
 - `site_owner=teamA`의 defender는 `teamB`.
 - `teamB`는 `teamA` 사이트만 방어할 수 있다.
 - `teamB`는 공격 시 `teamB` 자기 사이트와 `teamA` 방어 대상 사이트를 제외한다.
-- 따라서 6팀 기준 공격 대상은 4개다.
+- 따라서 7팀 기준 공격 대상은 5개다.
 
 구현 위치:
 
@@ -529,15 +594,15 @@ Docker socket 사용은 coordinator 내부 기능으로 제한한다. PoC runner
 
 1. `agent_sdk/` 생성
 2. `/agent-runs`, `/agent-runs/{id}/finish` 구현
-3. `/llm` gateway 구현
+3. `/llm` gateway와 OpenAI/OpenRouter wrapper 구현
 4. `llm_calls` audit 기록
-5. attack_agent 템플릿을 SDK 사용 방식으로 변경
+5. attack_agent 템플릿을 wrapper 사용 방식으로 변경
 
 완료 기준:
 
-- SDK로 시작한 attack agent가 `/llm` 호출을 남긴다.
+- official attack agent가 wrapper LLM 호출을 남긴다.
 - 비허용 모델은 403.
-- 팀 컨테이너에 OpenRouter key 없이도 SDK `llm()`이 동작한다.
+- 팀 컨테이너에 OpenRouter key 없이도 주입된 `OPENAI_BASE_URL`/`OPENAI_API_KEY`가 동작한다.
 
 ### Phase 2: PoC 제출과 자동 실행
 
@@ -549,8 +614,8 @@ Docker socket 사용은 coordinator 내부 기능으로 제한한다. PoC runner
 
 완료 기준:
 
-- SDK `submit_poc()`로 제출하면 submitted 생성 후 시스템이 실행한다.
-- `/llm` 호출 없는 run의 PoC는 reject.
+- `/agent/pocs` 또는 SDK `submit_poc_source()`로 제출하면 submitted 생성 후 시스템이 실행한다.
+- LLM 호출 없는 run의 PoC는 reject.
 - 같은 sha256은 merge 처리.
 
 ### Phase 3: PoC runner와 채점
@@ -563,9 +628,9 @@ Docker socket 사용은 coordinator 내부 기능으로 제한한다. PoC runner
 
 완료 기준:
 
-- `poc1.py`가 round 1, 2에서 성공하면 각각 +10.
+- 같은 PoC가 round 1, 2에서 성공하면 각각 +10.
 - round 3 실패 시 +0.
-- `poc2.py`가 같은 flag를 round 4에서 성공하면 +10.
+- 다른 PoC가 같은 flag를 round 4에서 성공하면 +10.
 - 같은 `(round,poc_id)` 재실행은 중복 점수 없음.
 
 ### Phase 4: Rotation과 defense patch enforcement
@@ -594,7 +659,7 @@ Docker socket 사용은 coordinator 내부 기능으로 제한한다. PoC runner
 
 - 운영자 화면에서 PoC별 모델, run, agent commit 추적 가능.
 - DOWN target은 PoC skipped 처리.
-- 이벤트 리허설에서 6팀, 20라운드 dry-run 가능.
+- 이벤트 리허설에서 7팀, 20라운드 dry-run 가능.
 
 ## 테스트 계획
 
@@ -608,7 +673,8 @@ Docker socket 사용은 coordinator 내부 기능으로 제한한다. PoC runner
 
 ### Integration
 
-- SDK -> `/agent-runs` -> `/llm` -> `/pocs`
+- free agent -> OpenAI/OpenRouter wrapper -> `/agent/attack` -> `/agent/pocs`
+- legacy SDK -> `/agent-runs` -> `/llm` -> `/pocs`
 - submitted PoC -> runner -> target service -> score update
 - defense SDK commit -> git push -> trailer 검증 -> deploy
 - target DOWN -> PoC skipped

@@ -8,7 +8,7 @@
 본선에서는 AI 공격 에이전트가 다른 팀 서비스를 공격하고,
 AI 방어 에이전트가 배정된 서비스를 패치한다.
 
-점수로 인정되는 공격과 방어는 반드시 제공된 SDK를 통해 실행해야 한다.
+점수로 인정되는 공격과 방어는 반드시 공식 agent run token과 coordinator wrapper를 통해 실행해야 한다.
 
 ---
 
@@ -18,7 +18,7 @@ AI 방어 에이전트가 배정된 서비스를 패치한다.
 본선에서는 방어 대상이 시계방향으로 한 칸씩 밀려 배정된다.
 
 ```text
-teamA <- teamB <- teamC <- teamD <- teamE <- teamF <- teamA
+teamA <- teamB <- teamC <- teamD <- teamE <- teamF <- teamG <- teamA
 ```
 
 예를 들어 `teamB` 기준으로 보면:
@@ -26,7 +26,7 @@ teamA <- teamB <- teamC <- teamD <- teamE <- teamF <- teamA
 - `teamB`가 만든 서비스는 `teamC`가 방어한다.
 - `teamB`는 `teamA` 서비스를 방어한다.
 - `teamB`는 자기 팀 서비스와 자기가 방어하는 `teamA` 서비스는 공격할 수 없다.
-- 따라서 `teamB`는 `teamC`, `teamD`, `teamE`, `teamF` 총 4팀을 공격할 수 있다.
+- 따라서 `teamB`는 `teamC`, `teamD`, `teamE`, `teamF`, `teamG` 총 5팀을 공격할 수 있다.
 
 모든 팀이 같은 방식으로 돌아간다.
 
@@ -84,13 +84,22 @@ vuln1, vuln2, vuln3, vuln4
 
 ## 6. 제출 방법
 
-처음 한 번만 로그인한다.
+제출 순서는 아래와 같다.
+
+1. 서비스 코드를 만든다.
+2. 서비스 안에 `vuln1`~`vuln4` 취약점 4개를 심는다.
+3. `vuln_spec.json`에 health, flag 주입, flag 회수, 취약점 공격 검증 요청을 적는다.
+4. 서비스를 로컬에서 실행한다.
+5. `gitctf.py check`가 PASS인지 확인한다.
+6. PASS가 나오면 `gitctf.py push`로 제출한다.
+
+처음 한 번만 로그인한다. 로그인은 제출 전 아무 때나 해도 된다.
 
 ```bash
 python scripts/gitctf.py login teamA --token "$TEAM_TOKEN" --coordinator http://HOST:9000
 ```
 
-서비스 폴더에서 확인한다.
+서비스 폴더에서 확인한다. 이때 서비스는 이미 실행 중이어야 한다.
 
 ```bash
 cd <서비스_폴더>
@@ -121,10 +130,18 @@ python ../scripts/gitctf.py push
 
 예시 템플릿은 아래처럼 확인한다.
 
+터미널 1:
+
 ```bash
 cd web_service
 make run
-make verify
+```
+
+터미널 2:
+
+```bash
+cd web_service
+make check
 ```
 
 ---
@@ -132,14 +149,18 @@ make verify
 ## 8. AI와 모델 규칙
 
 개발 중에는 Claude, ChatGPT, Gemini, IDE AI 등을 써도 된다.
-Agent SDK를 이용해 다른 LLM을 오케스트레이션하는 것도 허용된다.
+공식 agent 내부에서도 skill, subagent, planner, 토큰 최적화 등 오케스트레이션 방식은 자유다.
 
 본선 공격/방어에서 점수로 인정되려면 아래 규칙을 지켜야 한다.
 
-- 제공된 `agent_sdk`를 사용한다.
-- `/llm` 요청은 coordinator를 통해 보낸다.
+- LLM 요청은 coordinator의 OpenRouter 호환 wrapper를 통해 보낸다.
+- `agent_sdk`는 선택사항이다. 직접 쓰지 않아도 된다.
 - 공격/방어 에이전트는 아래 허용 모델만 사용한다.
 - 개인 LLM API key를 직접 쓰지 않는다.
+- 외부 OpenRouter API를 agent 안에서 직접 호출하지 않는다.
+- 팀 토큰으로 직접 `/agent-runs`, `/llm`, `/attack`, `/pocs`를 호출해 수동 PoC를 제출하지 않는다.
+- 공식 agent가 받은 `AGENT_RUN_TOKEN`으로 `/agent/attack`, `/agent/pocs` wrapper를 호출하는 것은 허용된다.
+- 다른 팀 repo를 raw git clone/fetch로 직접 가져가려고 시도하지 않는다.
 
 허용 모델:
 
@@ -157,9 +178,10 @@ xiaomi/mimo
 
 ## 9. 공격과 PoC
 
-공격 에이전트는 SDK로 상대 repo를 받고, SDK로 탐색 요청을 보낸다.
+공격 에이전트는 공식 run token으로 상대 repo를 받고, coordinator wrapper로 탐색 요청을 보낸 뒤 PoC를 제출한다.
+라운드 중 사람이 `poc.py`를 직접 제출하지 않는다.
 
-PoC는 `poc*.py` 파일로 제출한다.
+PoC는 에이전트가 `/agent/pocs` wrapper로 제출한다. `agent_sdk`의 `submit_poc_source()` 또는 `submit_poc()`를 써도 된다.
 
 PoC 규칙:
 
@@ -170,11 +192,10 @@ PoC 규칙:
 - 외부 인터넷 호출 금지
 - `subprocess`, `eval`, `exec` 금지
 
-로컬에서 PoC별로 검증할 수 있다.
+아래 명령은 PoC runner 계약을 디버깅할 때만 선택적으로 사용한다.
 
 ```bash
-python ../scripts/gitctf.py check --vuln 1 --poc poc1.py
-python ../scripts/gitctf.py check --poc1 poc1.py --poc2 poc2.py --poc3 poc3.py --poc4 poc4.py
+python ../scripts/gitctf.py check --vuln 1 --poc poc.py
 ```
 
 ---
@@ -185,7 +206,7 @@ python ../scripts/gitctf.py check --poc1 poc1.py --poc2 poc2.py --poc3 poc3.py -
 라운드 중 사람이 직접 패치 push하면 거절된다.
 
 방어 패치는 취약점을 막되, 서비스를 망가뜨리면 안 된다.
-SDK의 `commit_patch()`를 쓰면 필요한 `Agent-Run-ID`가 자동으로 붙는다.
+SDK의 `commit_patch()`를 쓰면 필요한 `Agent-Run-ID`가 자동으로 붙는다. SDK를 쓰지 않는 경우에도 커밋 trailer는 같은 값으로 남아야 한다.
 
 ---
 
@@ -212,7 +233,7 @@ SDK의 `commit_patch()`를 쓰면 필요한 `Agent-Run-ID`가 자동으로 붙�
 
 - coordinator, scoreboard, Docker host 공격
 - 다른 팀 인프라 DoS
-- SDK 없이 직접 `/attack`, `/pocs` 호출
+- 공식 `AGENT_RUN_TOKEN` 없이 legacy `/attack`, `/pocs` 직접 호출
 - 공식 공격/방어 중 개인 LLM API key 사용
 - 다른 팀 토큰 탈취 또는 사용
 - flag, PoC, exploit 코드를 팀 밖에 공유
@@ -225,6 +246,6 @@ SDK의 `commit_patch()`를 쓰면 필요한 `Agent-Run-ID`가 자동으로 붙�
 
 ![서비스 자가검증 PASS](docs/demo/service-verify.png)
 
-SDK 없는 요청과 허용되지 않은 모델 요청은 거절된다.
+run token 없는 wrapper 요청과 허용되지 않은 모델 요청은 거절된다.
 
 ![SDK 및 낮은 모델 게이트](docs/demo/sdk-gate.png)

@@ -1,213 +1,164 @@
 # HSPACE LiveFire AI Agent A&D
 
 AI 에이전트가 웹 서비스를 공격하고 방어하는 Attack & Defense 해커톤 플랫폼입니다.
-각 팀은 취약점이 들어 있는 서비스를 제출하고, 공격 에이전트는 다른 팀 서비스에서 flag를 탈취하는 `poc*.py`를 제출합니다. 시스템은 제출된 PoC를 직접 실행해 flag 반환 여부로 점수를 계산합니다.
 
-## 빠른 시작
+팀은 취약점 4개가 들어 있는 웹 서비스를 제출합니다. 운영 서버는 라운드마다 flag를 주입하고, 공격 에이전트가 제출한 PoC를 직접 실행해서 점수를 계산합니다. 방어 에이전트는 배정받은 다른 팀 서비스를 패치합니다.
+
+## 핵심만 보기
+
+실사용 명령은 `scripts/gitctf.py` 하나로 봅니다.
+
+| 대상 | 하는 일 | 명령 |
+|---|---|---|
+| 참가자 | 로그인 | `python scripts/gitctf.py login teamA --token <TOKEN> --coordinator http://HOST:9000` |
+| 참가자 | 서비스 검증 | `python ../scripts/gitctf.py check` |
+| 참가자 | 서비스 제출 | `python ../scripts/gitctf.py push` |
+| 참가자 | 에이전트 빌드 | `python scripts/gitctf.py agent build teamA` |
+| 관리자 | 사전검증 | `python scripts/gitctf.py admin preflight --repeat 3` |
+| 관리자 | 라운드 진행 | `python scripts/gitctf.py admin round next` |
+| 관리자 | 상태 확인 | `python scripts/gitctf.py admin status` |
+
+## 관리자 시작
 
 ```bash
-cd coordinator
-cp .env.example .env
-# .env에 ADMIN_SECRET, TOKEN_TEAM_A~F, 필요 시 OPENROUTER_API_KEY 설정
-
-cd ..
-docker compose up -d
+scripts/setup_admin_env.sh
+# coordinator/.env의 OPENROUTER_API_KEY와 팀 IP를 확인
+docker compose up -d --build
 curl http://localhost:9000/health
 ```
 
-서비스가 정상이라면 다음 주소를 사용할 수 있습니다.
+접속 주소:
 
 | 주소 | 용도 |
 |---|---|
 | `http://localhost:9000` | coordinator API |
 | `http://localhost:8080` | scoreboard |
 
-예시 서비스 템플릿은 로컬에서 이렇게 확인합니다.
+행사 직전:
+
+```bash
+python scripts/gitctf.py admin preflight --repeat 3
+python scripts/gitctf.py admin round next
+```
+
+운영 중:
+
+```bash
+python scripts/gitctf.py admin status
+python scripts/gitctf.py admin round next
+```
+
+## 참가자 시작
+
+제출 순서는 **서비스 구현 → 취약점 4개 심기 → `vuln_spec.json` 작성 → 로컬 실행 → `check` PASS → `push`** 입니다.
+예시 서비스는 `web_service/`입니다. 현재 예시는 “쓰기 싫은 업무 도우미” 서비스이며, `vuln1`~`vuln4` 취약점 검증 흐름까지 포함합니다.
+
+먼저 자기 서비스 폴더에서 아래 3가지를 준비합니다.
+
+- 실제 서비스 코드
+- `Dockerfile`
+- `vuln_spec.json`: `vuln1`~`vuln4`의 flag 주입, 회수, 공격 검증 요청
+
+터미널 1:
 
 ```bash
 cd web_service
 make run
 ```
 
-다른 터미널에서:
+터미널 2:
 
 ```bash
-python scripts/gitctf.py check --repo web_service --repeat 3
-```
-
-## 전체 구조
-
-```mermaid
-flowchart TD
-    C["coordinator<br/>라운드·flag·점수"]
-    B["scoreboard"]
-    DB["SQLite / data"]
-    G["team git repos"]
-    A["attack agent"]
-    D["defense agent"]
-    R["PoC runner"]
-    S["team services"]
-    L["OpenRouter"]
-
-    C --> B
-    C --> DB
-    C --> G
-    A --> C
-    D --> C
-    C --> R
-    R --> S
-    C --> S
-    C --> L
-```
-
-| 구성요소 | 역할 |
-|---|---|
-| `coordinator` | 라운드 진행, flag 주입, LLM 프록시, PoC 실행, 점수 계산 |
-| `scoreboard` | 현재 점수와 라운드 상태 표시 |
-| `web_service` | 자유 웹 서비스 개발용 예시 템플릿 |
-| `attack_agent` | 공격 에이전트 템플릿 |
-| `defense_agent` | 방어 에이전트 템플릿 |
-| `agent_sdk` | 에이전트가 coordinator와 통신하는 공통 SDK |
-| `scripts` | 제출, 검증, 라운드 진행 보조 도구 |
-
-## 게임 흐름
-
-```mermaid
-flowchart TD
-    A["팀 서비스 제출"] --> B["서비스 검증"]
-    B --> C["라운드 시작"]
-    C --> D["flag 주입"]
-    D --> E["공격·방어 에이전트 실행"]
-    E --> F["PoC 제출"]
-    F --> G["시스템이 PoC 실행"]
-    G --> H{"현재 flag 반환?"}
-    H -->|"예"| I["점수 반영"]
-    H -->|"아니오"| J["점수 없음"]
-    I --> K["다음 라운드"]
-    J --> K
-```
-
-## PoC 채점 방식
-
-PoC는 `poc1.py`, `poc2.py`처럼 Python 단일 파일로 제출합니다.
-시스템은 제출된 PoC를 격리된 runner에서 실행하고, stdout의 마지막 non-empty line이 현재 라운드의 유효한 flag인지 확인합니다.
-
-```bash
-TARGET_HOST=10.89.21.10 TARGET_PORT=8000 TARGET_TEAM=teamB FLAG_ID=vuln1 python poc1.py
-```
-
-로컬에서 PoC별로 확인할 수 있습니다.
-
-```bash
-python ../scripts/gitctf.py check --vuln 1 --poc poc1.py
-python ../scripts/gitctf.py check --poc1 poc1.py --poc2 poc2.py --poc3 poc3.py --poc4 poc4.py
-```
-
-성공 조건:
-
-- 파일명이 `poc*.py` 형식입니다.
-- SDK의 `submit_poc()`로 제출되었습니다.
-- PoC가 현재 라운드의 `HSPACE{...}` flag를 출력합니다.
-- 마지막 non-empty stdout line이 유효한 flag입니다.
-- 같은 `(round, poc_id)`는 한 번만 점수화됩니다.
-
-점수:
-
-| 결과 | 점수 |
-|---|---:|
-| PoC 성공 | 공격팀 `+10`, 방어팀 `-10` |
-| 서비스 OK | 해당 팀 `+10` |
-| PoC 실패 | 변화 없음 |
-| 서비스 DOWN | 가용성 점수 없음, 공격 대상에서 제외 |
-
-## 서비스 로테이션
-
-각 팀은 자기 서비스가 아니라 옆 팀 서비스를 방어합니다.
-
-```mermaid
-flowchart TD
-    A["A팀 서비스"] --> B["B팀 방어"]
-    B2["B팀 서비스"] --> C["C팀 방어"]
-    C2["C팀 서비스"] --> D["D팀 방어"]
-    D2["D팀 서비스"] --> E["E팀 방어"]
-    E2["E팀 서비스"] --> F["F팀 방어"]
-    F2["F팀 서비스"] --> A2["A팀 방어"]
-```
-
-공격 대상은 자기 서비스와 자기 방어 대상을 제외한 4개 서비스입니다.
-
-## 팀 서비스 제출
-
-참가팀은 자유롭게 웹 서비스를 만들 수 있습니다. `web_service/`는 참고용 템플릿입니다.
-
-필수 제출물:
-
-- 서비스 실행용 `Dockerfile`
-- 취약점 검증용 `vuln_spec.json`
-- 실제 서비스 코드
-
-로컬 검증:
-
-```bash
-cd <서비스_폴더>
+cd web_service
+python ../scripts/gitctf.py login teamA --token <TOKEN> --coordinator http://HOST:9000
 python ../scripts/gitctf.py check
-```
-
-제출:
-
-```bash
-python scripts/gitctf.py login teamA --token <TOKEN> --coordinator http://<COORDINATOR_IP>:9000
-cd <서비스_폴더>
 python ../scripts/gitctf.py push
 ```
 
-`gitctf.py`는 실행할 때 coordinator의 `/tools/gitctf.py`에서 최신 공식 helper를 확인합니다.
-파일이 다르면 최신본을 임시 캐시에 받은 뒤 그 코드로 다시 실행합니다.
-그래도 채점과 제출 수락은 서버의 Dockerfile, `vuln_spec.json`, defense provenance 검증이 최종 기준입니다.
+## 제출물
 
-## 에이전트 SDK 예시
+서비스 repo 루트에는 최소 3가지가 있어야 합니다.
 
-```python
-from agent_sdk import AgentContext
+| 파일 | 역할 |
+|---|---|
+| `Dockerfile` | 서비스를 빌드하고 실행 |
+| `vuln_spec.json` | health, flag 주입, 취약점 공격 검증 방법 선언 |
+| 서비스 코드 | 실제 웹 서비스 구현 |
 
-ctx = AgentContext.from_env()
+고정 API는 없습니다. `/health`, `/chat`을 꼭 쓸 필요도 없습니다. 실제 요청 형식은 `vuln_spec.json`에 선언하면 됩니다.
 
-repo = ctx.fetch_target_repo()
-scan = ctx.llm(
-    model="openai/gpt-4o-mini",
-    messages=[{"role": "user", "content": "find vulnerabilities"}],
-    purpose="scan",
-)
+## 실제 공격은 누가 하나
 
-# poc1.py를 만든 뒤 제출
-ctx.submit_poc(
-    "poc1.py",
-    target_team=ctx.target_team,
-    flag_id="vuln1",
-    llm_call_id=scan["llm_call_id"],
-)
+사람이 라운드 중 `poc.py`를 직접 제출하지 않습니다.
+
+1. coordinator가 공격 에이전트 컨테이너를 실행합니다.
+2. 공격 에이전트가 target repo snapshot을 받습니다.
+3. 공격 에이전트가 `/attack`으로 live service를 탐색합니다.
+4. 공격 에이전트가 PoC 소스를 만들고 `/agent/pocs` wrapper 또는 `submit_poc_source()`로 제출합니다.
+5. coordinator가 제출된 PoC를 격리 runner에서 실행합니다.
+6. stdout 마지막 non-empty line이 현재 flag면 점수가 반영됩니다.
+
+PoC runner 계약을 디버깅할 때만 아래처럼 직접 확인합니다.
+
+```bash
+python ../scripts/gitctf.py check --vuln 1 --poc poc.py
 ```
 
-## 디렉토리
+attack/defense agent 준비와 로컬 디버그도 `scripts/gitctf.py` 안의 `agent` 명령만 사용하면 됩니다.
+agent 내부 오케스트레이션은 자유입니다. OpenAI/OpenRouter 호환 클라이언트는 주입된 `OPENAI_BASE_URL` 또는 `OPENROUTER_BASE_URL`을 쓰면 coordinator의 OpenRouter wrapper를 거칩니다.
+내부 helper인 `scripts/agent.py`는 coordinator를 알 수 있으면 `/tools/agent.py` 최신 공식본을 확인한 뒤 실행합니다.
+공식 run 생성은 `RUNNER_SECRET`이 없으면 서버가 거부하며, raw git clone/fetch도 인증된 팀/방어팀만 가능합니다.
+runner는 `agent_manifest.json`의 `attack`/`defense` entrypoint를 실행하므로 코드 위치를 바꿔도 manifest만 맞추면 같은 runner에서 동작합니다.
+서비스 탐색과 PoC 제출은 `AGENT_RUN_TOKEN` Bearer 인증으로 `/agent/attack`, `/agent/pocs` wrapper를 호출하면 됩니다.
+
+## 점수
+
+| 이벤트 | 점수 |
+|---|---:|
+| PoC 성공 | 공격팀 `+10`, 방어팀 `-10` |
+| 서비스 OK | 서비스 소유팀 `+10` |
+| PoC 실패 | 변화 없음 |
+| 서비스 DOWN/FAULTY | 가용성 점수 없음 |
+
+같은 `(round, poc_id)`는 한 번만 점수화됩니다.
+
+## 방어 로테이션
+
+각 팀은 자기 서비스가 아니라 옆 팀 서비스를 방어합니다.
 
 ```text
-hackathon/
-├── coordinator/          API, 라운드, scoring, checker, PoC runner
-├── scoreboard/           정적 점수판
-├── web_service/          자유 웹 서비스 예시 템플릿
-├── attack_agent/         공격 에이전트 템플릿
-├── defense_agent/        방어 에이전트 템플릿
-├── agent_sdk/            공통 SDK
-├── scripts/              검증·제출·라운드 도구
-├── vuln_specs/           팀별 취약점 검증 spec
-└── tests/                핵심 흐름 테스트
+teamA 서비스 -> teamB 방어
+teamB 서비스 -> teamC 방어
+teamC 서비스 -> teamD 방어
+teamD 서비스 -> teamE 방어
+teamE 서비스 -> teamF 방어
+teamF 서비스 -> teamG 방어
+teamG 서비스 -> teamA 방어
 ```
 
-## 추가 문서
+공격 대상은 자기 서비스와 자기 방어 대상을 제외한 5개 서비스입니다.
 
-| 문서 | 내용 |
+## 주요 폴더
+
+| 경로 | 내용 |
 |---|---|
-| [RULEBOOK.md](RULEBOOK.md) | 참가 규칙 |
-| [ORGANIZER_GUIDE.md](ORGANIZER_GUIDE.md) | 행사 진행 체크리스트 |
-| [DEVELOPMENT_SPEC.md](DEVELOPMENT_SPEC.md) | 구현 상세 |
-| [SPEC_SLA_MONITOR.md](SPEC_SLA_MONITOR.md) | SLA 모니터링 설계 |
+| `coordinator/` | 라운드, flag, scoring, git push, PoC runner |
+| `scoreboard/` | 정적 점수판 |
+| `web_service/` | 참가자 서비스 예시 |
+| `attack_agent/` | 공격 에이전트 템플릿 |
+| `defense_agent/` | 방어 에이전트 템플릿 |
+| `agent_sdk/` | 호환용 에이전트 SDK |
+| `scripts/gitctf.py` | 참가자/관리자/agent 단일 CLI |
+| `scripts/agent.py` | `gitctf.py agent`가 호출하는 호환용 agent helper |
+| `tests/` | 핵심 흐름 테스트 |
+
+## 더 읽기
+
+| 문서 | 대상 |
+|---|---|
+| [RULEBOOK.md](RULEBOOK.md) | 참가자 규칙 |
+| [AGENT_USAGE.txt](AGENT_USAGE.txt) | agent 빌드와 디버그 |
+| [SCRIPT_USAGE.txt](SCRIPT_USAGE.txt) | 스크립트 빠른 사용법 |
+| [ORGANIZER_GUIDE.md](ORGANIZER_GUIDE.md) | 관리자 운영 |
+| [PROJECT_GUIDE.md](PROJECT_GUIDE.md) | 처음 보는 사람용 구조 설명 |
+| [DEVELOPMENT_SPEC.md](DEVELOPMENT_SPEC.md) | 내부 구현 상세 |
