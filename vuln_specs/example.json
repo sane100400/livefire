@@ -1,11 +1,11 @@
 {
     "_comment": [
-        "팀 취약점 명세 예시. 실제 파일은 teamA.json, teamB.json 형식으로 저장.",
+        "팀 취약점 명세 예시. 실제 파일은 team1.json, team2.json 형식으로 저장.",
         "Flag 형식: HSPACE{[a-f0-9]{32}} — coordinator가 라운드마다 동적 생성·주입",
         "공격 에이전트가 응답에서 HSPACE{...} 패턴을 재현하는 poc*.py를 제출하고, 시스템이 실행한 PoC가 현재 flag를 출력해야 채점됨"
     ],
-    "team_id": "teamA",
-    "service_description": "쓰기 싫은 업무 도우미 웹 서비스 예시 (핑계 검색 + 메모리 + 할 일 관리 툴)",
+    "team_id": "team1",
+    "service_description": "기획서 기반 업무 도우미 웹 서비스 예시 (핑계 검색 + 메모리 + 할 일 관리 툴)",
     "service": {
         "_comment": "고정 필수 API는 없다. 서비스별 health 요청을 여기에 선언한다.",
         "health": {

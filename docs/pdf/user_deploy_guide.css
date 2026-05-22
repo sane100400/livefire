@@ -1,0 +1,122 @@
+@page {
+  size: A4;
+  margin: 16mm 14mm;
+}
+
+html {
+  color: #111827;
+  font-family: "Noto Sans CJK KR", "Noto Sans KR", "UnDotum", sans-serif;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+body {
+  max-width: 100%;
+}
+
+h1, h2, h3 {
+  color: #0f172a;
+  line-height: 1.25;
+  page-break-after: avoid;
+  break-after: avoid;
+}
+
+h1 {
+  border-bottom: 2px solid #111827;
+  font-size: 24px;
+  margin: 0 0 18px;
+  padding-bottom: 10px;
+}
+
+h2 {
+  border-bottom: 1px solid #d1d5db;
+  font-size: 18px;
+  margin-top: 24px;
+  padding-bottom: 5px;
+}
+
+h3 {
+  font-size: 15px;
+  margin-top: 18px;
+}
+
+p, li {
+  overflow-wrap: anywhere;
+}
+
+a {
+  color: #0f766e;
+  text-decoration: none;
+}
+
+table {
+  border-collapse: collapse;
+  margin: 12px 0 16px;
+  table-layout: fixed;
+  width: 100%;
+}
+
+thead {
+  display: table-header-group;
+}
+
+tr {
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+
+th, td {
+  border: 1px solid #cbd5e1;
+  padding: 7px 8px;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+
+th {
+  background: #f1f5f9;
+  font-weight: 700;
+}
+
+code, pre {
+  font-family: "Noto Sans Mono CJK KR", "Noto Sans Mono", "UnDotum", monospace;
+}
+
+code {
+  background: #f3f4f6;
+  border-radius: 3px;
+  padding: 1px 4px;
+}
+
+pre {
+  background: #0f172a;
+  border-radius: 6px;
+  color: #f8fafc;
+  font-size: 11px;
+  line-height: 1.45;
+  margin: 12px 0 16px;
+  overflow: visible;
+  padding: 10px 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+pre code {
+  background: transparent;
+  color: inherit;
+  padding: 0;
+}
+
+blockquote {
+  border-left: 4px solid #cbd5e1;
+  color: #475569;
+  margin-left: 0;
+  padding-left: 12px;
+}
+
+img {
+  max-width: 100%;
+}
+
+* {
+  -webkit-print-color-adjust: exact;
+}

@@ -64,7 +64,7 @@ def _coordinator_from_argv(argv: list[str]) -> str | None:
         _extract_cli_option(argv, "--coordinator")
         or os.getenv("COORDINATOR_URL")
         or _load_config_quietly().get("coordinator")
-        or ("http://localhost:9000" if argv and argv[0] == "run" else None)
+        or ("http://localhost:42000" if argv and argv[0] == "run" else None)
     )
 
 
@@ -143,9 +143,9 @@ def _team_suffix(team: str) -> str:
     raw = team.strip()
     if raw.lower().startswith("team"):
         raw = raw[4:]
-    if raw.upper() not in {"A", "B", "C", "D", "E", "F", "G"}:
-        raise SystemExit("team은 teamA~teamG 중 하나여야 합니다.")
-    return raw.lower()
+    if raw not in {"1", "2", "3", "4", "5", "6"}:
+        raise SystemExit("team은 team1~team6 중 하나여야 합니다.")
+    return raw
 
 
 def _image_name(mode: str, team: str) -> str:
@@ -275,33 +275,33 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "자주 쓰는 명령:\n"
-            "  python scripts/agent.py build teamA\n"
-            "  python scripts/agent.py config teamA\n"
+            "  python scripts/agent.py build team1\n"
+            "  python scripts/agent.py config team1\n"
             "  python scripts/agent.py doctor --mode attack\n"
-            "  python scripts/agent.py run attack --team teamA --target teamC --token <TOKEN> --runner-secret <RUNNER_SECRET>\n"
+            "  python scripts/agent.py run attack --team team1 --target team3 --token <TOKEN> --runner-secret <RUNNER_SECRET>\n"
         ),
     )
     sub = parser.add_subparsers(dest="command", metavar="<command>")
     sub.required = True
 
     build_parser = sub.add_parser("build", help="팀 attack/defense agent 이미지 빌드")
-    build_parser.add_argument("team", help="teamA~teamG")
+    build_parser.add_argument("team", help="team1~team6")
     build_parser.add_argument("--mode", choices=["all", "attack", "defense"], default="all")
     build_parser.add_argument("--image", help="단일 mode 빌드 때 사용할 image 이름")
     build_parser.add_argument("--entrypoint", help="단일 mode 이미지에 고정할 agent entrypoint")
     build_parser.set_defaults(func=build)
 
     config_parser = sub.add_parser("config", help="coordinator/config.py에 넣을 image 이름 출력")
-    config_parser.add_argument("team", help="teamA~teamG")
+    config_parser.add_argument("team", help="team1~team6")
     config_parser.set_defaults(func=print_config)
 
     run_parser = sub.add_parser("run", help="agent를 로컬에서 디버그 실행")
     run_parser.add_argument("mode", choices=["attack", "defense"])
-    run_parser.add_argument("--team", required=True, help="실행 팀, 예: teamA")
-    run_parser.add_argument("--target", required=True, help="대상 팀, 예: teamC")
+    run_parser.add_argument("--team", required=True, help="실행 팀, 예: team1")
+    run_parser.add_argument("--target", required=True, help="대상 팀, 예: team3")
     run_parser.add_argument("--token", required=True, help="TEAM_TOKEN 또는 DEFENSE_TOKEN")
     run_parser.add_argument("--round", type=int, default=1)
-    run_parser.add_argument("--coordinator", default="http://localhost:9000")
+    run_parser.add_argument("--coordinator", default="http://localhost:42000")
     run_parser.add_argument("--runner-secret", default=os.getenv("RUNNER_SECRET", ""))
     run_parser.add_argument("--entrypoint", help="로컬 디버그 때 사용할 agent entrypoint")
     run_parser.set_defaults(func=run_local)

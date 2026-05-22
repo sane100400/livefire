@@ -19,7 +19,7 @@ echo "  PID: $COORDINATOR_PID (로그: /tmp/coordinator.log)"
 echo "  서버 기동 대기 중..."
 for i in $(seq 1 10); do
     sleep 1
-    if curl -sf http://localhost:9000/health > /dev/null 2>&1; then
+    if curl -sf http://localhost:42000/health > /dev/null 2>&1; then
         echo "  ✓ 서버 응답 확인"
         break
     fi
@@ -46,5 +46,5 @@ echo "[4/4] 라운드 1 수동 시작..."
 python "$SCRIPT_DIR/gitctf.py" admin round next
 
 echo ""
-echo "완료. 스코어보드: scoreboard/index.html 브라우저로 열기"
+echo "완료. 상태 확인: python scripts/gitctf.py admin status"
 echo "라운드 로그: tail -f $LOG_FILE"

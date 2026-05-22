@@ -2,11 +2,11 @@
 Git Smart HTTP 핸들러 + pre/post-receive 훅 로직.
 
 팀은 서비스 코드를 git push로 제출/패치한다:
-  python scripts/gitctf.py login teamA --token "$TEAM_TOKEN" --coordinator http://coordinator:9000
+  python scripts/gitctf.py login team1 --token "$TEAM_TOKEN" --coordinator http://coordinator:9000
   cd <서비스_폴더> && python ../scripts/gitctf.py push
 
 raw git도 지원한다:
-  git remote add organizer http://teamA:<TEAM_TOKEN>@coordinator:9000/git/teamA && git push organizer main
+  git remote add organizer http://team1:<TEAM_TOKEN>@coordinator:9000/git/team1 && git push organizer main
 
 인증: HTTP Basic Auth — username=team_id, password=TEAM_TOKEN
   - git-receive-pack (push): 팀 자신의 토큰만 허용
@@ -43,12 +43,12 @@ from fastapi import APIRouter, HTTPException, Header, Request, Response
 
 import db
 import flag_manager as fm
+from config import CHECKER_TOKEN
 from rotation import get_defender
 
 logger = logging.getLogger(__name__)
 
 REPOS_DIR = Path(os.getenv("REPOS_DIR", Path(__file__).parent.parent / "repos"))
-CHECKER_TOKEN = os.getenv("CHECKER_TOKEN", "checker-token-changeme")
 
 router = APIRouter(prefix="/git")
 GIT_SERVICES = {"git-upload-pack", "git-receive-pack"}
@@ -62,7 +62,7 @@ def _team_net(team_id: str) -> dict[str, object]:
     suffix = team_id.removeprefix("team").upper()
     return {
         "ip": TEAMS.get(team_id, {}).get("ip", "0.0.0.0"),
-        "host_port": int(os.getenv(f"HOST_PORT_TEAM_{suffix}", str(8001 + index))),
+        "host_port": int(os.getenv(f"HOST_PORT_TEAM_{suffix}", str(42001 + index))),
     }
 
 
@@ -294,15 +294,14 @@ while read oldrev newrev refname; do
     rm -rf "$DEPLOY_DIR"
 
     # 기존 컨테이너 중지 + 새 컨테이너 시작
-    docker stop "and-service-{docker_team}" 2>/dev/null
-    docker rm "and-service-{docker_team}" 2>/dev/null
+    docker stop "and-service-{docker_team}" "hackathon-{docker_team}-service-1" 2>/dev/null
+    docker rm "and-service-{docker_team}" "hackathon-{docker_team}-service-1" 2>/dev/null
     docker run -d \\
         --name "and-service-{docker_team}" \\
         --restart unless-stopped \\
         --network hackathon_target-net \\
         --ip "{team_ip}" \\
         --cpus 0.5 --memory 1g \\
-        -p "{host_port}:8000" \\
         -e "CHECKER_TOKEN=$CHECKER_TOKEN" \\
         "and-service-{docker_team}:latest"
 

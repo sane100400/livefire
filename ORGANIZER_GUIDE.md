@@ -54,7 +54,7 @@ scripts/setup_admin_env.sh
 vim coordinator/.env
 ```
 
-`setup_admin_env.sh`는 7팀(teamA~teamG) 기준으로 `coordinator/.env`와
+`setup_admin_env.sh`는 6팀(team1~team6) 기준으로 `coordinator/.env`와
 `coordinator/team_tokens.tsv`를 생성한다.
 
 > **팀에게 배포**: 각 팀에게 `TOKEN_TEAM_X` 값만 전달. `ADMIN_SECRET`은 절대 공유 금지.
@@ -70,8 +70,10 @@ docker compose up -d --build
 # 상태 확인
 docker compose ps
 # coordinator가 healthy 상태인지 확인
-curl http://localhost:9000/health
+curl http://localhost:42000/health
 ```
+
+서버 가용성 smoke test, agent 요청 제한 기본값, 429 대응 기준은 `SERVER_AVAILABILITY_GUIDE.md`를 따른다.
 
 `docker-compose.yml`은 PoC runner가 host Docker daemon에 제출 파일을 마운트할 수 있도록
 `POC_HOST_DATA_DIR=${PWD}/data`를 coordinator에 넘긴다. compose 밖에서 coordinator를 직접
@@ -84,12 +86,12 @@ coordinator가 시작되면 `init_all_repos()`가 자동 실행된다.
 
 ```bash
 ls /opt/hackathon/repos/
-# teamA/  teamB/  teamC/  teamD/  teamE/  teamF/  teamG/
+# team1/  team2/  team3/  team4/  team5/  team6/
 ```
 
 각 팀에게 배포할 git remote URL:
 ```
-http://<코디네이터IP>:9000/git/teamA
+http://knights.hspace.io:42000/git/team1
 ```
 참가자는 보통 raw git 명령 대신 `scripts/gitctf.py` 제출 helper를 사용한다.
 
@@ -116,9 +118,9 @@ coordinator는 `/tools/gitctf.py`, `/tools/validate_vulns.py`, `/tools/agent.py`
 팀에게 배포할 내용:
 
 ```
-팀 ID: teamA
-토큰: <TOKEN_TEAM_A 값>
-coordinator: http://<IP>:9000
+팀 ID: team1
+토큰: <TOKEN_TEAM_1 값>
+coordinator: http://knights.hspace.io:42000
 
 # 제출 순서
 # 1. 서비스 코드 작성
@@ -129,7 +131,7 @@ coordinator: http://<IP>:9000
 
 # 최초 제출
 cd <서비스_폴더>
-python ../scripts/gitctf.py login teamA --token <TOKEN_TEAM_A> --coordinator http://<IP>:9000
+python ../scripts/gitctf.py login team1 --token <TOKEN_TEAM_1> --coordinator http://knights.hspace.io:42000
 python ../scripts/gitctf.py check
 python ../scripts/gitctf.py push
 
@@ -137,18 +139,18 @@ python ../scripts/gitctf.py push
 python ../scripts/gitctf.py push --message "patch service"
 ```
 
-대회 중 방어팀이 배정받은 다른 팀 repo를 push할 때는 `--repo-team`을 사용한다. 이때 커밋에는 defense agent SDK가 넣은 `Agent-Run-ID` trailer가 있어야 한다.
+대회 중 방어팀이 시스템 지정 repo를 push할 때는 `--repo-team`을 사용한다. 이때 커밋에는 defense agent SDK가 넣은 `Agent-Run-ID` trailer가 있어야 한다.
 
 ```bash
 python scripts/gitctf.py push \
-  --repo patched_teamA_service \
-  --repo-team teamA \
-  --team teamB \
-  --token <DEFENSE_TOKEN_TEAM_B> \
+  --repo patched_team1_service \
+  --repo-team team1 \
+  --team team2 \
+  --token <DEFENSE_TOKEN_TEAM_2> \
   --no-commit
 ```
 
-> raw git fallback: `git remote add organizer http://teamA:<TOKEN>@<IP>:9000/git/teamA && git push organizer main`
+> raw git fallback: `git remote add organizer http://team1:<TOKEN>@<IP>:42000/git/team1 && git push organizer main`
 
 ### 제출 전 팀 자가검증 (팀이 직접 실행)
 
@@ -165,12 +167,12 @@ python ../scripts/gitctf.py check --vuln 1 --poc poc.py
 
 ### vuln_spec 제출 방법
 
-팀이 `vuln_spec.json`을 `vuln_specs/teamA.json`으로 저장하거나
+팀이 `vuln_spec.json`을 `vuln_specs/team1.json`으로 저장하거나
 git push 시 자동으로 복사되도록 pre-receive 훅이 설정된다.
 
 수동 등록 (팀이 파일 전달 시):
 ```bash
-cp <팀 제출 spec>.json /opt/hackathon/vuln_specs/teamA.json
+cp <팀 제출 spec>.json /opt/hackathon/vuln_specs/team1.json
 ```
 
 ---
@@ -182,25 +184,25 @@ cp <팀 제출 spec>.json /opt/hackathon/vuln_specs/teamA.json
 ```bash
 cd /opt/hackathon
 python scripts/gitctf.py admin preflight \
-  --coordinator http://localhost:9000 \
+  --coordinator http://localhost:42000 \
   --repeat 3 \
   --report /tmp/preflight_report.json
 ```
 
 출력 예:
 ```
-[1/3] Coordinator 헬스 체크: http://localhost:9000/health
+[1/3] Coordinator 헬스 체크: http://localhost:42000/health
   ✓ OK — round=0, active=False
 
-[2/3] 팀 서비스 헬스 체크 (7팀)
-  ✓ teamA (http://192.168.1.10:8000/health)
-  ✗ teamC (http://192.168.1.12:8000/health) — 연결 오류
+[2/3] 팀 서비스 헬스 체크 (6팀)
+  ✓ team1 (http://192.168.1.10:8000/health)
+  ✗ team3 (http://192.168.1.12:8000/health) — 연결 오류
 
 [3/3] 취약점 검증 (반복 3회)
   ...
 
 사전검증 FAIL ✗
-  - 팀 서비스 다운: teamC
+  - 팀 서비스 다운: team3
 ```
 
 ### 4-2. 미통과 팀 대응
@@ -232,8 +234,8 @@ crontab -e
 
 추가 내용:
 ```
-0,30 21-23 * * * COORDINATOR_URL=http://localhost:9000 ADMIN_SECRET=<값> python3 /opt/hackathon/scripts/gitctf.py admin round next >> /tmp/and_round.log 2>&1
-0,30 0-7 * * * COORDINATOR_URL=http://localhost:9000 ADMIN_SECRET=<값> python3 /opt/hackathon/scripts/gitctf.py admin round next >> /tmp/and_round.log 2>&1
+0,30 21-23 * * * COORDINATOR_URL=http://localhost:42000 ADMIN_SECRET=<값> python3 /opt/hackathon/scripts/gitctf.py admin round next >> /tmp/and_round.log 2>&1
+0,30 0-7 * * * COORDINATOR_URL=http://localhost:42000 ADMIN_SECRET=<값> python3 /opt/hackathon/scripts/gitctf.py admin round next >> /tmp/and_round.log 2>&1
 ```
 
 또는 `.env`에 값이 있으면 스크립트가 자동으로 읽는다:
@@ -257,18 +259,17 @@ python scripts/gitctf.py admin round start
 ### 5-3. 실시간 모니터링
 
 ```bash
-# 스코어보드 API (10초 갱신)
-watch -n 10 'curl -s http://localhost:9000/scoreboard | python3 -m json.tool'
+# 점수 JSON API (10초 갱신)
+watch -n 10 'curl -s http://localhost:42000/scoreboard | python3 -m json.tool'
 
 # 라운드 로그
 tail -f /tmp/and_round.log
 
 # 공격 감사 로그 (특정 팀)
-curl "http://localhost:9000/admin/audit-log?attacker=teamA" \
+curl "http://localhost:42000/admin/audit-log?attacker=team1" \
   -H "X-Admin-Secret: $ADMIN_SECRET" | python3 -m json.tool
 
-# 스코어보드 UI
-# scoreboard/index.html을 nginx 등으로 서빙하면 자동 갱신
+# 전체 운영은 CLI/API 기준으로 진행한다. 별도 그래픽 점수판은 운영하지 않는다.
 ```
 
 ### 5-4. 팀 서비스 패치 처리
@@ -290,19 +291,19 @@ curl "http://localhost:9000/admin/audit-log?attacker=teamA" \
 ```bash
 docker compose restart coordinator
 # DB(SQLite WAL)는 크래시 안전 — 재시작 후 자동 복구
-curl http://localhost:9000/health
+curl http://localhost:42000/health
 ```
 
 ### 특정 팀 서비스 강제 재시작
 
 ```bash
-docker restart and-service-teama
+docker restart and-service-team1
 # flag는 다음 /admin/inject 호출 시 재주입됨
 # 또는 수동 재주입:
-curl -X POST http://localhost:9000/admin/service-deployed \
+curl -X POST http://localhost:42000/admin/service-deployed \
   -H "X-Admin-Secret: $ADMIN_SECRET" \
   -H "Content-Type: application/json" \
-  -d '{"team_id": "teamA", "commit": "manual"}'
+  -d '{"team_id": "team1", "commit": "manual"}'
 ```
 
 ### 라운드 로그 크래시로 건너뜀
@@ -319,12 +320,12 @@ python scripts/gitctf.py admin round start --force
 
 ```bash
 # 특정 팀의 모든 공격 기록 추출
-curl "http://localhost:9000/admin/audit-log?attacker=teamA&limit=2000" \
-  -H "X-Admin-Secret: $ADMIN_SECRET" > /tmp/audit_teamA.json
+curl "http://localhost:42000/admin/audit-log?attacker=team1&limit=2000" \
+  -H "X-Admin-Secret: $ADMIN_SECRET" > /tmp/audit_team1.json
 
 # PoC 재실행 성공 내역 확인 (DB 직접)
 sqlite3 coordinator/game_state.db \
-  "SELECT * FROM poc_results WHERE attacker_team='teamA' ORDER BY created_at DESC LIMIT 50;"
+  "SELECT * FROM poc_results WHERE attacker_team='team1' ORDER BY created_at DESC LIMIT 50;"
 ```
 
 ---
@@ -341,14 +342,14 @@ python scripts/gitctf.py admin round end
 ### 7-2. 최종 스코어보드 캡처
 
 ```bash
-curl http://localhost:9000/scoreboard | python3 -m json.tool > /tmp/final_scoreboard.json
-curl http://localhost:9000/history | python3 -m json.tool > /tmp/full_history.json
+curl http://localhost:42000/scoreboard | python3 -m json.tool > /tmp/final_scoreboard.json
+curl http://localhost:42000/history | python3 -m json.tool > /tmp/full_history.json
 ```
 
 ### 7-3. 감사 리포트 생성
 
 ```bash
-curl "http://localhost:9000/admin/audit-log?limit=2000" \
+curl "http://localhost:42000/admin/audit-log?limit=2000" \
   -H "X-Admin-Secret: $ADMIN_SECRET" > /tmp/audit_full.json
 
 # 팀별 PoC flag 탈취 집계
@@ -387,7 +388,7 @@ hackathon/
 │   └── requirements.txt
 ├── vuln_specs/            팀별 취약점 명세
 │   ├── example.json       작성 예시
-│   └── teamA.json         (팀 제출 후 배치)
+│   └── team1.json         (팀 제출 후 배치)
 ├── web_service/          자유 웹 서비스 개발용 예시 템플릿
 │   ├── main.py
 │   ├── vuln_spec.json
@@ -397,8 +398,6 @@ hackathon/
 │   └── Dockerfile
 ├── scripts/
 │   └── gitctf.py          참가자/관리자 단일 CLI
-├── scoreboard/
-│   └── index.html         실시간 스코어보드 UI
 ├── docker-compose.yml
 ├── RULEBOOK.md            참가팀 배포용 규칙서
 └── ORGANIZER_GUIDE.md     이 파일
@@ -423,7 +422,7 @@ hackathon/
 
 ### D-0 21:00 직전 체크리스트
 - [ ] `python scripts/gitctf.py admin preflight --repeat 3` PASS 확인
-- [ ] 스코어보드 UI 팀 화면에 표시
+- [ ] `python scripts/gitctf.py admin status`와 `/scoreboard` JSON 응답 확인
 - [ ] cron 등록 확인 (`crontab -l`)
 - [ ] 비상 연락 채널(Slack/Discord) 개설
 - [ ] `/tmp/and_round.log` tail 터미널 열어놓기

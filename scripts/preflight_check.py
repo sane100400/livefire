@@ -93,10 +93,20 @@ def check_team_health(teams: dict, specs: dict[str, dict]) -> dict[str, bool]:
     return results
 
 
-def validate_all_vulns(hosts: dict, port: int, repeat: int, report_path: str) -> bool:
+def _missing_team_specs(teams: dict, specs: dict[str, dict]) -> list[str]:
+    return [team_id for team_id in teams if team_id not in specs]
+
+
+def validate_all_vulns(
+    teams: dict,
+    specs: dict[str, dict],
+    port: int,
+    repeat: int,
+    report_path: str,
+    checker_token: str,
+) -> bool:
     print(f"\n[3/3] 취약점 검증 (반복 {repeat}회, N/N 성공 조건)")
 
-    from validate_vulns import load_spec, validate_single
     from datetime import datetime, timezone
     import json
 
@@ -108,16 +118,29 @@ def validate_all_vulns(hosts: dict, port: int, repeat: int, report_path: str) ->
     }
 
     all_passed = True
-    for spec_file in sorted(VULN_SPEC_DIR.glob("*.json")):
-        if spec_file.name == "example.json":
+    missing_specs = _missing_team_specs(teams, specs)
+    if missing_specs:
+        all_passed = False
+        print(f"  ✗ 팀별 vuln_spec 누락: {', '.join(missing_specs)}")
+        for team_id in missing_specs:
+            report["teams"][team_id] = {
+                "passed": False,
+                "health": False,
+                "failure": "vuln_spec missing",
+            }
+
+    for team_id in teams:
+        spec = specs.get(team_id)
+        if not spec:
             continue
-        spec = load_spec(str(spec_file))
-        team_id = spec["team_id"]
-        host = hosts.get(team_id)
-        if not host:
-            print(f"  [SKIP] {team_id} — hosts에 IP 없음")
-            continue
-        result = validate_single(spec, host, port, repeat=repeat)
+        info = teams[team_id]
+        result = validate_single(
+            spec,
+            info["ip"],
+            info.get("port", port),
+            repeat=repeat,
+            checker_token=checker_token,
+        )
         report["teams"][team_id] = result
         if not result["passed"]:
             all_passed = False
@@ -149,30 +172,33 @@ def load_teams_from_config() -> dict:
 
 
 def main():
+    env_values = {}
+    env_file = COORDINATOR_DIR / ".env"
+    if env_file.exists():
+        for line in env_file.read_text(encoding="utf-8").splitlines():
+            if "=" not in line or line.strip().startswith("#"):
+                continue
+            key, value = line.split("=", 1)
+            env_values[key.strip()] = value.strip().strip('"').strip("'")
+
     parser = argparse.ArgumentParser(description="AI A&D 이벤트 사전검증 스크립트")
-    parser.add_argument("--coordinator", default="http://localhost:9000",
-                        help="Coordinator URL (기본: http://localhost:9000)")
+    parser.add_argument("--coordinator", default="http://localhost:42000",
+                        help="Coordinator URL (기본: http://localhost:42000)")
     parser.add_argument("--hosts-file", metavar="PATH",
                         help="팀 IP 매핑 JSON (없으면 config.py TEAMS 사용)")
     parser.add_argument("--port", type=int, default=8000,
                         help="팀 서비스 포트 (기본: 8000)")
     parser.add_argument("--repeat", type=int, default=3,
                         help="취약점 반복 검증 횟수 (기본: 3)")
+    parser.add_argument("--checker-token", default=os.environ.get("CHECKER_TOKEN") or env_values.get("CHECKER_TOKEN", "checker-token-changeme"),
+                        help="서비스 checker 인증 토큰 (기본: CHECKER_TOKEN, coordinator/.env, 또는 checker-token-changeme)")
     parser.add_argument("--report", default=str(SCRIPTS_DIR / "validation_report.json"),
                         help="검증 리포트 저장 경로")
     parser.add_argument("--skip-vuln", action="store_true",
                         help="취약점 검증 생략 (헬스 체크만)")
     args = parser.parse_args()
 
-    admin_secret = os.environ.get("ADMIN_SECRET", "")
-    if not admin_secret:
-        # .env 직접 로드 시도
-        env_file = COORDINATOR_DIR / ".env"
-        if env_file.exists():
-            for line in env_file.read_text().splitlines():
-                if line.startswith("ADMIN_SECRET="):
-                    admin_secret = line.split("=", 1)[1].strip()
-                    break
+    admin_secret = os.environ.get("ADMIN_SECRET") or env_values.get("ADMIN_SECRET", "")
     if not admin_secret:
         print("경고: ADMIN_SECRET 없음 — preflight-done 호출 생략됩니다")
 
@@ -201,7 +227,14 @@ def main():
 
     # 3. 취약점 검증
     if not args.skip_vuln:
-        vuln_ok = validate_all_vulns(hosts, args.port, args.repeat, args.report)
+        vuln_ok = validate_all_vulns(
+            teams,
+            specs,
+            args.port,
+            args.repeat,
+            args.report,
+            args.checker_token,
+        )
         if not vuln_ok:
             failures.append("취약점 검증 실패")
     else:

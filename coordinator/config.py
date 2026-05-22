@@ -12,7 +12,7 @@ def _env_bool(name: str, default: str = "0") -> bool:
 # 각 팀은 web_service/ 를 기본 포트 8000으로 실행한다.
 TEAM_SUFFIXES = tuple(
     suffix.strip().upper()
-    for suffix in os.getenv("TEAM_SUFFIXES", "A,B,C,D,E,F,G").split(",")
+    for suffix in os.getenv("TEAM_SUFFIXES", "1,2,3,4,5,6").split(",")
     if suffix.strip()
 )
 
@@ -40,7 +40,7 @@ TEAMS = {
 TEAM_ORDER = list(TEAMS.keys())
 
 STARTING_SCORE      = 1000
-MAX_ATTACKS_ROUND   = 10    # 팀당 라운드 외부 요청 횟수 (전 타겟 합산, 내부 추론 스텝은 무제한)
+MAX_ATTACKS_ROUND   = int(os.getenv("MAX_ATTACKS_ROUND", "10"))  # 팀당 라운드 탐색 요청 수
 ATTACK_REWARD       = 10    # 익스플로잇 성공 시 공격팀 획득
 ATTACK_PENALTY      = 10    # 익스플로잇 성공 시 방어팀 차감
 AVAILABILITY_BONUS  = 10    # 서비스 살아있으면 라운드당 획득
@@ -49,6 +49,7 @@ COORDINATOR_PORT    = 9000
 
 # ── 시크릿 (반드시 .env 에서 로드, 없으면 시작 시 KeyError로 크래시) ─
 ADMIN_SECRET = os.environ["ADMIN_SECRET"]
+CHECKER_TOKEN = os.getenv("CHECKER_TOKEN", "checker-token-changeme")
 
 # ── 팀 인증 토큰 (행사 당일 .env에서 로드 후 각 팀에게 배포) ────────
 TEAM_TOKENS = {_team_id(suffix): os.environ[f"TOKEN_TEAM_{suffix}"] for suffix in TEAM_SUFFIXES}
@@ -67,7 +68,7 @@ ALLOW_UNSAFE_AGENT_RUNS = _env_bool("ALLOW_UNSAFE_AGENT_RUNS")
 ALLOW_STUDENT_AGENT_RUNS = _env_bool("ALLOW_STUDENT_AGENT_RUNS")
 
 # ── 공격 에이전트 Docker 이미지 (행사 전 팀 제출물 빌드 후 등록) ─────
-# docker build -t and-attack-teama:latest ./attack_agent_teamA/
+# docker build -t and-attack-team1:latest ./attack_agent_team1/
 ATTACK_AGENT_IMAGES = {
     _team_id(suffix): f"and-attack-team{suffix.lower()}:latest"
     for suffix in TEAM_SUFFIXES
@@ -78,7 +79,7 @@ DEFENSE_AGENT_IMAGES = {
     for suffix in TEAM_SUFFIXES
 }
 
-COORDINATOR_URL = os.getenv("COORDINATOR_URL", "http://localhost:9000")
+COORDINATOR_URL = os.getenv("COORDINATOR_URL", "http://localhost:42000")
 
 # ── OpenRouter gateway ───────────────────────────────────────────────
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
@@ -102,6 +103,25 @@ MAX_LLM_PROMPT_BYTES = int(os.getenv("MAX_LLM_PROMPT_BYTES", str(128 * 1024)))
 MAX_LLM_MAX_TOKENS = int(os.getenv("MAX_LLM_MAX_TOKENS", "4096"))
 MAX_ATTACK_REQUEST_BYTES = int(os.getenv("MAX_ATTACK_REQUEST_BYTES", str(64 * 1024)))
 MAX_ATTACK_RESPONSE_BYTES = int(os.getenv("MAX_ATTACK_RESPONSE_BYTES", str(128 * 1024)))
+
+# ── 요청 빈도 제한 ─────────────────────────────────────────────────
+# 키 기준: agent run token > bearer token > team token > admin secret > client IP.
+# 기본값은 6팀 동시 운영 기준으로, 정상 agent 루프는 통과시키되 runaway loop는 빠르게 429로 막는다.
+_LEGACY_RATE_LIMIT_AGENT_RUNS = os.getenv("RATE_LIMIT_AGENT_RUNS")
+RATE_LIMIT_ATTACK_AGENT_RUNS = os.getenv(
+    "RATE_LIMIT_ATTACK_AGENT_RUNS",
+    _LEGACY_RATE_LIMIT_AGENT_RUNS or "10/minute",
+)
+RATE_LIMIT_DEFENSE_AGENT_RUNS = os.getenv(
+    "RATE_LIMIT_DEFENSE_AGENT_RUNS",
+    _LEGACY_RATE_LIMIT_AGENT_RUNS or "5/minute",
+)
+RATE_LIMIT_AGENT_RUNS = _LEGACY_RATE_LIMIT_AGENT_RUNS or RATE_LIMIT_ATTACK_AGENT_RUNS
+RATE_LIMIT_REPO_ARCHIVE = os.getenv("RATE_LIMIT_REPO_ARCHIVE", "6/minute")
+RATE_LIMIT_LLM = os.getenv("RATE_LIMIT_LLM", "30/minute")
+RATE_LIMIT_ATTACK = os.getenv("RATE_LIMIT_ATTACK", "20/minute")
+RATE_LIMIT_POC_SUBMIT = os.getenv("RATE_LIMIT_POC_SUBMIT", "12/minute")
+RATE_LIMIT_TOOLS = os.getenv("RATE_LIMIT_TOOLS", "60/minute")
 
 # ── 파일 경로 ────────────────────────────────────────────────────────
 VULN_SPEC_DIR = os.getenv("VULN_SPEC_DIR", os.path.join(os.path.dirname(__file__), "..", "vuln_specs"))

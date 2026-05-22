@@ -5,7 +5,7 @@
 컨테이너에는 아래 환경 변수가 전달된다:
 
   COORDINATOR_URL  코디네이터 엔드포인트 (예: http://10.89.20.2:9000)
-  TEAM_ID          이 컨테이너를 실행한 팀 ID (예: teamA)
+  TEAM_ID          이 컨테이너를 실행한 팀 ID (예: team1)
   MODE             attack
   TARGET_TEAM      이번 agent run의 타겟 팀
   TEAM_TOKEN       /attack 호출 시 X-Team-Token 헤더에 사용할 인증 토큰
@@ -14,7 +14,7 @@
   OPENAI_BASE_URL  OpenAI-compatible wrapper URL
   OPENAI_API_KEY   AGENT_RUN_TOKEN과 같은 값
   ROUND            현재 라운드 번호
-  TARGETS          허용 공격 대상 JSON {"teamC": {"ip": ..., "port": ..., "name": ...}, ...}
+  TARGETS          허용 공격 대상 JSON {"team3": {"ip": ..., "port": ..., "name": ...}, ...}
   TARGET_REPO_URL  타겟 팀 git smart HTTP URL (SDK가 임시 Basic Auth 헤더 사용)
 """
 import hashlib

@@ -6,7 +6,7 @@
 
 - 팀은 자유롭게 웹 서비스를 만들고 flag 4개를 심는다.
 - 고정 필수 API는 없다. health, flag 주입/조회, 기본 기능 검증 요청은 `vuln_spec.json`에 선언한다.
-- 사이트는 시계 방향으로 한 칸 옆 팀이 방어한다.
+- 방어 대상은 coordinator의 대상 계산 로직이 정한다. 참가자 공지는 대회 당일 별도로 안내한다.
 - 공격과 방어 산출물은 반드시 팀 AI 에이전트가 만든 것으로 증명되어야 한다.
 - 개발 과정에서는 외부 LLM, IDE AI, 오케스트레이션 LLM 사용을 허용한다.
 - 공식 라운드 중 점수와 연결되는 attack/defense agent 실행은 OpenRouter 화이트리스트 저성능 모델만 사용한다.
@@ -27,7 +27,7 @@
 | 용어 | 의미 |
 |---|---|
 | site owner | 사이트를 처음 만든 팀 |
-| defender | 시계 방향으로 사이트를 넘겨받아 패치하는 팀 |
+| defender | 특정 사이트를 패치하도록 시스템이 지정한 팀 |
 | attacker | PoC를 제출하는 팀 |
 | agent run | attack 또는 defense agent 컨테이너의 1회 실행 |
 | SDK-issued run id | Agent SDK가 자동으로 발급·전달하는 내부 실행 ID |
@@ -65,10 +65,10 @@ from agent_sdk import AgentContext
 ctx = AgentContext.from_env()
 repo = ctx.fetch_target_repo()
 scan = ctx.llm(model="openai/gpt-4o-mini", messages=[...], purpose="scan")
-ctx.attack("payload", llm_call_id=scan["llm_call_id"], target_team="teamC")
+ctx.attack("payload", llm_call_id=scan["llm_call_id"], target_team="team3")
 ctx.request_target("/api/search", method="POST", json_body={"q": "payload"}, llm_call_id=scan["llm_call_id"])
 poc = ctx.llm(model="openai/gpt-4o-mini", messages=[...], purpose="poc")
-ctx.submit_poc_source(poc_source, llm_call_id=poc["llm_call_id"], target_team="teamC", flag_id="vuln2")
+ctx.submit_poc_source(poc_source, llm_call_id=poc["llm_call_id"], target_team="team3", flag_id="vuln2")
 ctx.commit_patch("patch vuln2")
 ```
 
@@ -134,7 +134,7 @@ attack/defense agent 빌드와 로컬 디버그를 합친 단일 helper. 클라�
 
 팀 방어 에이전트 템플릿.
 
-- 시계 방향으로 넘겨받은 사이트 repo를 checkout한다.
+- 시스템이 지정한 사이트 repo를 checkout한다.
 - SDK를 사용해 취약점/PoC 결과/서비스 로그를 분석한다.
 - 패치를 만든 뒤 `ctx.commit_patch()` 또는 제공 git wrapper로 커밋한다.
 - SDK가 자동 삽입한 `Agent-Run-ID` trailer가 없는 push는 coordinator에서 거부된다.
@@ -161,7 +161,7 @@ attack/defense agent 빌드와 로컬 디버그를 합친 단일 helper. 클라�
 
 Agent SDK/runner만 호출한다. `RUNNER_SECRET`이 설정되어 있지 않으면 기본적으로
 run 생성을 거부한다. 로컬 개발에서만 `ALLOW_UNSAFE_AGENT_RUNS=1`로 우회할 수 있다.
-브라우저/참가자용 `/student/agent-runs`는 기본 비활성화이며, 운영에서 켜지 않는다.
+참가자 직접 run 생성용 `/student/agent-runs`는 기본 비활성화이며, 운영에서 켜지 않는다.
 
 Headers:
 
@@ -175,11 +175,11 @@ Request:
 
 ```json
 {
-  "team_id": "teamA",
+  "team_id": "team1",
   "mode": "attack",
-  "target_team": "teamC",
+  "target_team": "team3",
   "round_num": 1,
-  "agent_image": "and-attack-teama:latest",
+  "agent_image": "and-attack-team1:latest",
   "agent_image_digest": "sha256:...",
   "agent_commit": "abc1234"
 }
@@ -199,8 +199,8 @@ Rules:
 
 - `mode`는 `attack` 또는 `defense`.
 - attack run은 자기 팀과 자기 방어 대상 사이트를 target으로 둘 수 없다.
-- defense run은 시계 방향으로 배정된 사이트만 target으로 둘 수 있다.
-- 라운드 중복 실행 정책은 mode별로 둔다. MVP는 팀·mode·target·round당 여러 run 허용, dashboard에서 모두 표시한다.
+- defense run은 시스템이 지정한 사이트만 target으로 둘 수 있다.
+- 라운드 중복 실행 정책은 mode별로 둔다. MVP는 팀·mode·target·round당 여러 run 허용, CLI/API 조회에서 모두 표시한다.
 - 이후 legacy `/llm`, `/attack`, `/pocs`, `/agent-runs/{id}/finish`, `/agent-runs/{id}/target-repo.tar` 호출은 `X-Agent-Run-Token`과 SDK HMAC 서명이 일치해야 한다.
 - `/llm`은 message 개수, prompt byte 크기, `max_tokens` 상한을 서버에서 제한한다.
 - `/attack`은 요청/응답 크기와 proxy header를 제한한다.
@@ -308,8 +308,8 @@ Request:
 {
   "agent_run_id": "uuid",
   "llm_call_id": 123,
-  "attacker_team": "teamA",
-  "target_team": "teamC",
+  "attacker_team": "team1",
+  "target_team": "team3",
   "payload": "message",
   "session_id": "optional"
 }
@@ -317,7 +317,8 @@ Request:
 
 Rules:
 
-- 팀당 10턴/라운드 제한은 `/attack`에만 적용한다.
+- 팀당 기본 10턴/라운드 제한은 `/attack`에만 적용한다.
+- Blind SQLi처럼 반복 요청이 필요한 취약점은 제출된 PoC 실행 단계에서 반복 요청하게 하고, 운영자는 필요 시 `POC_TIMEOUT_SEC`, `MAX_ATTACKS_ROUND`, `RATE_LIMIT_ATTACK`을 별도로 조정한다.
 - target이 DOWN이면 거부한다.
 - 공격 가능 대상은 자기 사이트와 자기 방어 대상 제외 4개다.
 - 응답에서 flag가 보여도 즉시 점수화하지 않는다. 점수는 제출된 PoC를 runner가 실행해 현재 flag를 확인할 때만 발생한다.
@@ -497,18 +498,14 @@ CREATE TABLE service_deployments (
 
 Defense patch push는 `mode='defense_patch'`, `agent_run_id` 필수다.
 
-## 로테이션 규칙
+## 공격/방어 대상 계산
 
 팀 순서는 config에 고정한다.
+구체적인 방어 매칭표는 참가자용 문서에 미리 공개하지 않는다.
 
-```text
-teamA -> teamB -> teamC -> teamD -> teamE -> teamF -> teamG -> teamA
-```
-
-- `site_owner=teamA`의 defender는 `teamB`.
-- `teamB`는 `teamA` 사이트만 방어할 수 있다.
-- `teamB`는 공격 시 `teamB` 자기 사이트와 `teamA` 방어 대상 사이트를 제외한다.
-- 따라서 7팀 기준 공격 대상은 5개다.
+- 각 팀은 자기 서비스와 시스템이 지정한 제외 대상은 공격할 수 없다.
+- 6팀 기준 팀당 공격 대상은 4개다.
+- 세부 매칭은 `coordinator/rotation.py` helper가 계산한다.
 
 구현 위치:
 
@@ -610,7 +607,7 @@ Docker socket 사용은 coordinator 내부 기능으로 제한한다. PoC runner
 2. `/pocs` multipart 업로드 구현
 3. sha256, 파일명, 크기, run 검증 구현
 4. 제출 직후 현재 라운드 자동 실행
-5. scoreboard/admin API에서 submitted PoC와 실행 결과 표시
+5. `/scoreboard` JSON과 admin API에서 submitted PoC와 실행 결과 표시
 
 완료 기준:
 
@@ -648,18 +645,18 @@ Docker socket 사용은 coordinator 내부 기능으로 제한한다. PoC runner
 - 방어팀이 아닌 팀의 defense patch push 거부.
 - 수동 git push 방어 패치 거부.
 
-### Phase 5: SLA, UI, cleanup
+### Phase 5: SLA, CLI/API cleanup
 
 1. SLA 주기적 checker loop
-2. scoreboard에 PoC results, service status, agent provenance 노출
+2. `/scoreboard` JSON에 PoC results, service status, agent provenance 노출
 3. 즉시 flag 제출 채점 경로 제거 상태 유지
 4. README, RULEBOOK, ORGANIZER_GUIDE 동기화
 
 완료 기준:
 
-- 운영자 화면에서 PoC별 모델, run, agent commit 추적 가능.
+- CLI/API 조회로 PoC별 모델, run, agent commit 추적 가능.
 - DOWN target은 PoC skipped 처리.
-- 이벤트 리허설에서 7팀, 20라운드 dry-run 가능.
+- 이벤트 리허설에서 6팀, 20라운드 dry-run 가능.
 
 ## 테스트 계획
 

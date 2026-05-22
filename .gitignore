@@ -8,6 +8,8 @@ dist/
 
 # 시크릿 (절대 커밋 금지)
 coordinator/.env
+coordinator/team_tokens.tsv
+token_handouts/
 *.env
 
 # 런타임 생성 파일
@@ -21,6 +23,9 @@ vuln_specs/team*.json
 
 # 검증 리포트
 scripts/validation_report.json
+
+# 로컬 실험용 단일 파일 서비스
+simple_sqli.py
 
 # 생성된 참가자 배포 번들
 user_deploy/

@@ -9,22 +9,25 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DEST = ROOT / "user_deploy"
+DIST = ROOT / "dist"
+BUNDLE_ARCHIVE = DIST / "hspace-livefire-user-deploy.tar.gz"
 
 COPY_PATHS = [
     ".dockerignore",
+    "DISCORD_NOTICE.txt",
+    "USER_DEPLOY_GUIDE.md",
     "RULEBOOK.md",
     "RULE_SUMMARY.txt",
+    "SERVER_AVAILABILITY_GUIDE.md",
     "AGENT_USAGE.txt",
     "SCRIPT_USAGE.txt",
     "agent_manifest.json",
-    "docs/demo",
     "agent_sdk",
     "web_service",
     "attack_agent",
     "defense_agent",
     "scripts/agent.py",
     "scripts/gitctf.py",
-    "scripts/setup_admin_env.sh",
     "scripts/validate_vulns.py",
 ]
 
@@ -42,14 +45,30 @@ EXCLUDE_DIRS = {
 EXCLUDE_SUFFIXES = {".pyc", ".pyo"}
 
 
-README = """# HSPACE LiveFire A&D Participant Package
+README = """# HSPACE LiveFire A&D 일반 사용자 배포 패키지
 
-이 폴더는 참가자 배포용 파일만 모은 패키지입니다. coordinator, scoreboard, 진행 문서, 시크릿 템플릿, 런타임 데이터는 포함하지 않습니다.
+이 폴더는 일반 사용자/참가자 배포용 파일만 모은 패키지입니다. coordinator, 운영자 시크릿, 런타임 데이터는 포함하지 않습니다.
+
+서버 기준 주소:
+
+- Coordinator API: http://knights.hspace.io:42000
+- CLI 공지 txt: http://knights.hspace.io:42000/deploy/DISCORD_NOTICE.txt
+- 전체 번들: http://knights.hspace.io:42000/deploy-bundle.tar.gz
+
+번들은 CLI로 받습니다.
+
+```bash
+curl -fLO http://knights.hspace.io:42000/deploy-bundle.tar.gz
+tar -xzf hspace-livefire-user-deploy.tar.gz
+cd user_deploy
+```
 
 ## 포함 파일
 
 | 경로 | 용도 |
 |---|---|
+| `USER_DEPLOY_GUIDE.md` | 일반 사용자 CLI 배포 가이드 |
+| `DISCORD_NOTICE.txt` | Discord 공지사항 복붙용 서버/배포 안내 |
 | `web_service/` | 자유 웹 서비스 개발용 예시 템플릿. `Dockerfile`, `main.py`, `vuln_spec.json` 예시 포함 |
 | `attack_agent/` | 공격 에이전트 템플릿 |
 | `defense_agent/` | 방어 에이전트 템플릿 |
@@ -57,18 +76,20 @@ README = """# HSPACE LiveFire A&D Participant Package
 | `agent_manifest.json` | runner가 attack/defense entrypoint를 찾는 호환 manifest |
 | `scripts/gitctf.py` | 로그인, 서비스 검증, 제출, agent 빌드를 처리하는 단일 helper |
 | `scripts/agent.py` | `gitctf.py agent`가 호출하는 호환용 agent helper |
-| `scripts/setup_admin_env.sh` | 운영자가 7팀용 `.env`와 토큰 표를 만드는 helper |
 | `scripts/validate_vulns.py` | `gitctf.py check`가 내부에서 사용하는 검증 엔진 |
 | `RULE_SUMMARY.txt` | 전체 규칙 최소 요약 |
 | `RULEBOOK.md` | 참가팀 규칙서 |
+| `SERVER_AVAILABILITY_GUIDE.md` | 서버 가용성 점검과 agent 요청 제한 |
 | `AGENT_USAGE.txt` | agent 빌드와 디버그 사용법 |
 | `SCRIPT_USAGE.txt` | 관리자/참가자 기본 스크립트 사용법 |
 
 ## 서비스 개발
 
-주제는 **"쓰기 싫은 사이트 만들기"**입니다. 쓸데없고 귀찮지만 실제로 실행되는 웹 서비스를 만들고, 의도된 취약점 4개를 심습니다.
+각 팀은 **사전에 제공된 기획서를 바탕으로 서비스를 구현**하고, 의도된 취약점 4개를 심습니다.
 고정 필수 API는 없습니다. `web_service/`는 참고용 템플릿이고, 실제 서비스 API는 `vuln_spec.json`에 맞춰 자유롭게 만들면 됩니다.
-제출 순서는 서비스 구현, 취약점 4개 심기, `vuln_spec.json` 작성, 서비스 실행, `check` PASS, `push`입니다.
+로컬 실행과 `check`는 제출 전 자가검증용입니다. 공식 제출, 대회 당일 실행, 채점은 주최 측이 제공하는 대회 서버와 coordinator 기준으로 진행됩니다.
+대회 서버 접속 방법과 앱 배포 절차는 `USER_DEPLOY_GUIDE.md`를 기준으로 합니다.
+제출 순서는 서비스 구현, 취약점 4개 심기, `vuln_spec.json` 작성, 자가검증, 대회 서버 배포 안내 확인, `check` PASS, `push`입니다.
 
 터미널 1:
 
@@ -88,7 +109,7 @@ make check
 
 ```bash
 cd <서비스_폴더>
-python ../scripts/gitctf.py login teamA --token "$TEAM_TOKEN" --coordinator http://<COORDINATOR_IP>:9000
+python ../scripts/gitctf.py login team1 --token "$TEAM_TOKEN" --coordinator http://knights.hspace.io:42000
 python ../scripts/gitctf.py check
 python ../scripts/gitctf.py push
 ```
@@ -104,16 +125,21 @@ python ../scripts/gitctf.py push
 패키지 루트에서 빌드합니다.
 
 ```bash
-python scripts/gitctf.py agent build teamA --mode attack
+python scripts/gitctf.py agent build team1 --mode attack
 ```
 
-## Agent SDK 최소 사용 예
+## Agent 오케스트레이션
 
-공식 라운드에서는 실행 컨테이너에 필요한 환경변수가 주입됩니다.
-참가자 로컬에서 직접 만든 run은 점수 산출물로 인정되지 않습니다.
-agent 오케스트레이션은 자유입니다. OpenAI/OpenRouter 호환 client는 주입된
-`OPENAI_BASE_URL`/`OPENAI_API_KEY`를 그대로 쓰면 coordinator wrapper를 거칩니다.
-서비스 탐색과 PoC 제출은 `HSPACE_AGENT_BASE_URL`의 `/attack`, `/pocs` wrapper를 호출하면 됩니다.
+자세한 규칙은 `AGENT_USAGE.txt`를 먼저 읽습니다.
+
+핵심은 아래와 같습니다.
+
+- 오케스트레이션 방식은 자유입니다.
+- LangChain, AutoGen, 직접 만든 planner 등 어떤 구조든 가능합니다.
+- 공식 라운드에서는 주입된 `OPENAI_BASE_URL` 또는 `OPENROUTER_BASE_URL`만 사용합니다.
+- 주입된 `OPENAI_API_KEY` 또는 `OPENROUTER_API_KEY`는 실제 외부 API key가 아니라 `AGENT_RUN_TOKEN`입니다.
+- 외부 AI API URL을 코드에 직접 넣지 않습니다.
+- 서비스 탐색과 PoC 제출은 `HSPACE_AGENT_BASE_URL`의 `/attack`, `/pocs` wrapper를 호출합니다.
 
 ```python
 import os, httpx
@@ -137,7 +163,7 @@ httpx.post(os.environ["HSPACE_AGENT_BASE_URL"] + "/attack", headers=auth, json={
 패키지 루트에서 빌드합니다.
 
 ```bash
-python scripts/gitctf.py agent build teamA --mode defense
+python scripts/gitctf.py agent build team1 --mode defense
 ```
 """
 
@@ -161,20 +187,43 @@ def _copy_path(relative: str) -> None:
         shutil.copy2(source, target)
 
 
+def _clear_directory(path: Path) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    for child in path.iterdir():
+        if child.is_dir() and not child.is_symlink():
+            shutil.rmtree(child)
+        else:
+            child.unlink()
+
+
 def main() -> int:
-    if DEST.exists():
-        shutil.rmtree(DEST)
-    DEST.mkdir(parents=True)
+    _clear_directory(DEST)
+    DIST.mkdir(parents=True, exist_ok=True)
 
     for relative in COPY_PATHS:
         _copy_path(relative)
 
     (DEST / "README.md").write_text(README, encoding="utf-8")
     (DEST / "bundle_manifest.json").write_text(
-        json.dumps({"included": COPY_PATHS}, indent=2, ensure_ascii=False) + "\n",
+        json.dumps({
+            "server": "http://knights.hspace.io:42000",
+            "notice": "http://knights.hspace.io:42000/deploy/DISCORD_NOTICE.txt",
+            "bundle": "http://knights.hspace.io:42000/deploy-bundle.tar.gz",
+            "cli_only": True,
+            "included": COPY_PATHS,
+        }, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
+    if BUNDLE_ARCHIVE.exists():
+        BUNDLE_ARCHIVE.unlink()
+    shutil.make_archive(
+        str(BUNDLE_ARCHIVE.with_suffix("").with_suffix("")),
+        "gztar",
+        root_dir=ROOT,
+        base_dir=DEST.name,
+    )
     print(f"Built participant bundle: {DEST}")
+    print(f"Built archive: {BUNDLE_ARCHIVE}")
     return 0
 
 

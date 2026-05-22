@@ -1,0 +1,1144 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HSPACE LiveFire A&amp;D 대회 안내</title>
+  <style>
+    :root {
+      --bg: #090d11;
+      --surface: #121a21;
+      --surface-2: #1d2832;
+      --ink: #fff5e8;
+      --muted: #b8c7ce;
+      --line: rgba(255, 245, 232, 0.18);
+      --line-strong: rgba(255, 245, 232, 0.34);
+      --red: #ff5638;
+      --green: #45d6b2;
+      --yellow: #f3be59;
+      --blue: #76a8ff;
+      --danger: #ff6680;
+      --radius: 8px;
+      --pad: clamp(36px, 5.8vw, 86px);
+      --shadow: 0 28px 80px rgba(0, 0, 0, 0.36);
+      --ease: cubic-bezier(0.22, 1, 0.36, 1);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      background: var(--bg);
+      color: var(--ink);
+      font-family: "Pretendard", "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", system-ui, sans-serif;
+      line-height: 1.25;
+      scroll-behavior: smooth;
+    }
+
+    body {
+      margin: 0;
+      overflow-x: hidden;
+    }
+
+    button {
+      font: inherit;
+    }
+
+    .toolbar {
+      align-items: center;
+      backdrop-filter: blur(16px);
+      background: rgba(9, 13, 17, 0.76);
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      box-shadow: 0 18px 48px rgba(0, 0, 0, 0.34);
+      display: flex;
+      gap: 8px;
+      padding: 8px;
+      position: fixed;
+      right: 20px;
+      top: 20px;
+      z-index: 20;
+    }
+
+    .toolbar button {
+      align-items: center;
+      background: rgba(255, 245, 232, 0.09);
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: var(--ink);
+      cursor: pointer;
+      display: inline-flex;
+      font-weight: 900;
+      justify-content: center;
+      min-height: 42px;
+      min-width: 42px;
+      padding: 0 15px;
+    }
+
+    .toolbar button:hover {
+      background: rgba(255, 245, 232, 0.15);
+      border-color: var(--line-strong);
+    }
+
+    .toolbar button:focus-visible {
+      outline: 3px solid rgba(69, 214, 178, 0.72);
+      outline-offset: 3px;
+    }
+
+    .toolbar .print {
+      background: var(--red);
+      border-color: transparent;
+      color: #1c0805;
+      min-width: 132px;
+    }
+
+    .counter {
+      color: var(--muted);
+      font-size: 14px;
+      font-weight: 900;
+      min-width: 58px;
+      text-align: center;
+    }
+
+    .progress {
+      background: rgba(255, 245, 232, 0.12);
+      height: 4px;
+      left: 0;
+      position: fixed;
+      right: 0;
+      top: 0;
+      z-index: 30;
+    }
+
+    .progress span {
+      background: linear-gradient(90deg, var(--red), var(--green), var(--yellow), var(--blue));
+      display: block;
+      height: 100%;
+      transform-origin: left center;
+      transform: scaleX(0.07);
+      transition: transform 240ms var(--ease);
+    }
+
+    .slide {
+      background:
+        linear-gradient(120deg, rgba(255, 86, 56, 0.14), transparent 36%),
+        radial-gradient(circle at 83% 16%, rgba(69, 214, 178, 0.12), transparent 30%),
+        linear-gradient(180deg, var(--surface), var(--bg));
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      flex-direction: column;
+      gap: clamp(24px, 3.2vw, 44px);
+      justify-content: space-between;
+      min-height: 100svh;
+      overflow: hidden;
+      padding: var(--pad);
+      position: relative;
+    }
+
+    .slide:nth-child(3n + 2) {
+      background:
+        linear-gradient(120deg, rgba(118, 168, 255, 0.15), transparent 36%),
+        radial-gradient(circle at 80% 18%, rgba(243, 190, 89, 0.12), transparent 28%),
+        linear-gradient(180deg, #111a24, var(--bg));
+    }
+
+    .slide:nth-child(3n + 3) {
+      background:
+        linear-gradient(120deg, rgba(69, 214, 178, 0.13), transparent 36%),
+        radial-gradient(circle at 78% 22%, rgba(255, 102, 128, 0.12), transparent 30%),
+        linear-gradient(180deg, #10191d, var(--bg));
+    }
+
+    .slide::before {
+      background: linear-gradient(90deg, var(--red), var(--green), var(--yellow), var(--blue));
+      content: "";
+      height: 6px;
+      left: var(--pad);
+      position: absolute;
+      right: var(--pad);
+      top: 0;
+    }
+
+    .slide::after {
+      background-image:
+        linear-gradient(rgba(255, 245, 232, 0.045) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 245, 232, 0.04) 1px, transparent 1px);
+      background-size: 48px 48px;
+      content: "";
+      inset: 0;
+      mask-image: linear-gradient(180deg, transparent, black 18%, black 78%, transparent);
+      opacity: 0.55;
+      pointer-events: none;
+      position: absolute;
+    }
+
+    .slide > * {
+      position: relative;
+      z-index: 1;
+    }
+
+    .body {
+      align-content: center;
+      display: grid;
+      flex: 1;
+      gap: clamp(22px, 3.4vw, 46px);
+    }
+
+    .center {
+      justify-content: center;
+    }
+
+    .kicker {
+      color: var(--green);
+      font-size: clamp(18px, 1.55vw, 25px);
+      font-weight: 1000;
+      letter-spacing: 0;
+      margin: 0 0 18px;
+      text-transform: uppercase;
+    }
+
+    h1,
+    h2,
+    h3,
+    p {
+      margin-top: 0;
+    }
+
+    h1 {
+      font-size: clamp(72px, 9.2vw, 142px);
+      letter-spacing: 0;
+      line-height: 0.92;
+      margin-bottom: 26px;
+      max-width: 1180px;
+    }
+
+    h2 {
+      font-size: clamp(54px, 6vw, 92px);
+      letter-spacing: 0;
+      line-height: 0.98;
+      margin-bottom: 22px;
+      max-width: 1220px;
+    }
+
+    h3 {
+      font-size: clamp(30px, 2.8vw, 44px);
+      letter-spacing: 0;
+      line-height: 1.05;
+      margin-bottom: 14px;
+    }
+
+    .lead {
+      color: var(--muted);
+      font-size: clamp(30px, 3.1vw, 46px);
+      line-height: 1.28;
+      margin-bottom: 0;
+      max-width: 1120px;
+    }
+
+    .text {
+      color: var(--muted);
+      font-size: clamp(24px, 2.15vw, 34px);
+      line-height: 1.35;
+      margin-bottom: 0;
+    }
+
+    .red { color: var(--red); }
+    .green { color: var(--green); }
+    .yellow { color: var(--yellow); }
+    .blue { color: var(--blue); }
+    .danger { color: var(--danger); }
+
+    .split {
+      display: grid;
+      gap: clamp(26px, 4vw, 58px);
+      grid-template-columns: minmax(0, 1.06fr) minmax(360px, 0.94fr);
+    }
+
+    .grid-2,
+    .grid-3,
+    .grid-4 {
+      display: grid;
+      gap: 18px;
+    }
+
+    .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .grid-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+
+    .card,
+    .metric,
+    .row,
+    .team,
+    .rule,
+    .terminal {
+      background: rgba(255, 245, 232, 0.078);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+    }
+
+    .card,
+    .rule {
+      min-height: 178px;
+      padding: clamp(24px, 2.6vw, 36px);
+    }
+
+    .card p,
+    .rule p {
+      color: var(--muted);
+      font-size: clamp(24px, 2vw, 32px);
+      line-height: 1.32;
+      margin-bottom: 0;
+    }
+
+    .chip-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 14px;
+    }
+
+    .chip {
+      align-items: center;
+      background: rgba(255, 245, 232, 0.1);
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: var(--ink);
+      display: inline-flex;
+      font-size: clamp(22px, 1.9vw, 30px);
+      font-weight: 900;
+      min-height: 50px;
+      padding: 10px 18px;
+      white-space: nowrap;
+    }
+
+    .chip.good {
+      background: rgba(69, 214, 178, 0.14);
+      border-color: rgba(69, 214, 178, 0.42);
+      color: #c8fff0;
+    }
+
+    .chip.warn {
+      background: rgba(243, 190, 89, 0.14);
+      border-color: rgba(243, 190, 89, 0.42);
+      color: #ffe4a9;
+    }
+
+    .chip.bad {
+      background: rgba(255, 102, 128, 0.14);
+      border-color: rgba(255, 102, 128, 0.42);
+      color: #ffd0d8;
+    }
+
+    .route {
+      display: grid;
+      gap: 16px;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      margin-top: 40px;
+    }
+
+    .route .card {
+      min-height: 180px;
+    }
+
+    .route b {
+      color: var(--ink);
+      display: block;
+      font-size: clamp(32px, 2.8vw, 45px);
+      line-height: 1.02;
+      margin-bottom: 16px;
+    }
+
+    .route span {
+      color: var(--muted);
+      display: block;
+      font-size: clamp(22px, 1.8vw, 28px);
+      line-height: 1.28;
+    }
+
+    .list {
+      display: grid;
+      gap: 16px;
+      list-style: none;
+      margin: 0;
+      padding: 0;
+    }
+
+    .list li {
+      background: rgba(255, 245, 232, 0.078);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      color: var(--muted);
+      font-size: clamp(28px, 2.55vw, 40px);
+      font-weight: 800;
+      line-height: 1.25;
+      min-height: 86px;
+      padding: 22px 28px;
+    }
+
+    .list strong {
+      color: var(--ink);
+    }
+
+    .stack {
+      display: grid;
+      gap: 15px;
+    }
+
+    .row {
+      box-shadow: none;
+      display: grid;
+      gap: 22px;
+      grid-template-columns: minmax(220px, 0.36fr) minmax(0, 1fr);
+      min-height: 88px;
+      padding: 22px 26px;
+    }
+
+    .row strong {
+      color: var(--ink);
+      font-size: clamp(28px, 2.35vw, 38px);
+      line-height: 1.04;
+    }
+
+    .row span {
+      color: var(--muted);
+      font-size: clamp(24px, 2vw, 31px);
+      line-height: 1.32;
+    }
+
+    .flow {
+      display: grid;
+      gap: 16px;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+    }
+
+    .flow .card {
+      min-height: 220px;
+    }
+
+    .flow b {
+      color: var(--ink);
+      display: block;
+      font-size: clamp(30px, 2.45vw, 40px);
+      line-height: 1.04;
+      margin-bottom: 16px;
+    }
+
+    .flow span {
+      color: var(--muted);
+      display: block;
+      font-size: clamp(22px, 1.75vw, 28px);
+      line-height: 1.28;
+    }
+
+    .metric-grid {
+      display: grid;
+      gap: 18px;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+
+    .metric {
+      min-height: 190px;
+      padding: 26px;
+    }
+
+    .metric strong {
+      color: var(--ink);
+      display: block;
+      font-size: clamp(56px, 5.4vw, 90px);
+      letter-spacing: 0;
+      line-height: 0.92;
+      margin-bottom: 18px;
+    }
+
+    .metric span {
+      color: var(--muted);
+      display: block;
+      font-size: clamp(23px, 1.9vw, 31px);
+      line-height: 1.28;
+    }
+
+    .swap {
+      display: grid;
+      gap: 16px;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .team {
+      box-shadow: none;
+      min-height: 150px;
+      padding: 24px;
+    }
+
+    .team strong {
+      color: var(--ink);
+      display: block;
+      font-size: clamp(36px, 3.4vw, 58px);
+      line-height: 0.95;
+      margin-bottom: 14px;
+    }
+
+    .team span {
+      color: var(--muted);
+      display: block;
+      font-size: clamp(24px, 2vw, 32px);
+      line-height: 1.25;
+    }
+
+    .table {
+      border-collapse: collapse;
+      font-size: clamp(25px, 2.1vw, 34px);
+      overflow: hidden;
+      width: 100%;
+    }
+
+    .table th,
+    .table td {
+      border-bottom: 1px solid var(--line);
+      padding: 20px 22px;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    .table th {
+      color: var(--green);
+      font-size: clamp(22px, 1.75vw, 28px);
+      font-weight: 1000;
+    }
+
+    .table tr:last-child td {
+      border-bottom: 0;
+    }
+
+    .badge {
+      border-radius: 999px;
+      display: inline-flex;
+      font-weight: 1000;
+      justify-content: center;
+      min-width: 96px;
+      padding: 8px 14px;
+    }
+
+    .plus {
+      background: rgba(69, 214, 178, 0.14);
+      color: #c8fff0;
+    }
+
+    .minus {
+      background: rgba(255, 102, 128, 0.14);
+      color: #ffd0d8;
+    }
+
+    .zero {
+      background: rgba(255, 245, 232, 0.1);
+      color: var(--muted);
+    }
+
+    .callout {
+      background: rgba(255, 86, 56, 0.14);
+      border: 1px solid rgba(255, 86, 56, 0.42);
+      border-radius: var(--radius);
+      color: #ffd4cc;
+      font-size: clamp(30px, 2.8vw, 44px);
+      font-weight: 1000;
+      line-height: 1.24;
+      padding: 28px 32px;
+    }
+
+    .callout.good {
+      background: rgba(69, 214, 178, 0.13);
+      border-color: rgba(69, 214, 178, 0.42);
+      color: #d8fff5;
+    }
+
+    .terminal {
+      background: #070a0d;
+      border-color: rgba(69, 214, 178, 0.3);
+      color: #d9fff3;
+      font-family: "SFMono-Regular", "Cascadia Code", "Consolas", monospace;
+      font-size: clamp(21px, 1.85vw, 29px);
+      line-height: 1.55;
+      overflow: hidden;
+    }
+
+    .terminal-bar {
+      align-items: center;
+      background: rgba(255, 245, 232, 0.06);
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      gap: 10px;
+      padding: 14px 18px;
+    }
+
+    .dot {
+      border-radius: 50%;
+      display: inline-block;
+      height: 12px;
+      width: 12px;
+    }
+
+    .dot.red { background: var(--red); }
+    .dot.yellow { background: var(--yellow); }
+    .dot.green { background: var(--green); }
+
+    .terminal pre {
+      margin: 0;
+      overflow-wrap: anywhere;
+      padding: 24px;
+      white-space: pre-wrap;
+    }
+
+    .footer {
+      align-items: center;
+      color: rgba(255, 245, 232, 0.54);
+      display: flex;
+      font-size: 15px;
+      font-weight: 900;
+      justify-content: space-between;
+    }
+
+    .footer span:last-child {
+      color: rgba(255, 245, 232, 0.36);
+      font-family: "SFMono-Regular", "Cascadia Code", "Consolas", monospace;
+    }
+
+    .reveal {
+      opacity: 0;
+      transform: translateY(18px);
+      transition: opacity 520ms var(--ease), transform 520ms var(--ease);
+    }
+
+    .slide.is-active .reveal {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    .slide.is-active .reveal:nth-child(2) { transition-delay: 80ms; }
+    .slide.is-active .reveal:nth-child(3) { transition-delay: 150ms; }
+    .slide.is-active .reveal:nth-child(4) { transition-delay: 220ms; }
+
+    @media (max-width: 980px) {
+      .toolbar {
+        left: 12px;
+        right: 12px;
+        top: 12px;
+        justify-content: flex-end;
+      }
+
+      .slide {
+        padding: 86px clamp(22px, 5vw, 36px) 30px;
+      }
+
+      .split,
+      .grid-2,
+      .grid-3,
+      .grid-4,
+      .route,
+      .flow,
+      .metric-grid,
+      .swap {
+        grid-template-columns: 1fr;
+      }
+
+      .row {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *,
+      *::before,
+      *::after {
+        transition-duration: 0.001ms !important;
+      }
+      .reveal {
+        opacity: 1;
+        transform: none;
+      }
+    }
+
+    @page {
+      margin: 0;
+      size: 16in 9in;
+    }
+
+    @media print {
+      :root {
+        --pad: 0.62in;
+      }
+
+      html,
+      body {
+        background: #fff;
+        height: auto;
+        margin: 0;
+        overflow: visible;
+        width: 16in;
+      }
+
+      .toolbar,
+      .progress {
+        display: none !important;
+      }
+
+      .deck {
+        display: block;
+        margin: 0;
+        width: 16in;
+      }
+
+      .slide {
+        break-after: page;
+        break-inside: avoid;
+        border: 0;
+        height: 9in;
+        min-height: 9in;
+        overflow: hidden;
+        page-break-after: always;
+        page-break-inside: avoid;
+        padding: var(--pad);
+        width: 16in;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
+
+      .slide:last-child {
+        break-after: auto;
+        page-break-after: auto;
+      }
+
+      .reveal {
+        opacity: 1 !important;
+        transform: none !important;
+      }
+
+      h1 { font-size: 88pt; }
+      h2 { font-size: 58pt; }
+      h3 { font-size: 28pt; }
+      .lead { font-size: 30pt; }
+      .text,
+      .card p,
+      .rule p,
+      .row span,
+      .team span,
+      .table,
+      .terminal {
+        font-size: 22pt;
+      }
+      .metric strong { font-size: 58pt; }
+      .callout { font-size: 29pt; }
+      .card,
+      .metric,
+      .row,
+      .team,
+      .rule,
+      .terminal {
+        box-shadow: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="toolbar" aria-label="프레젠테이션 제어">
+    <button type="button" data-action="prev" aria-label="이전 슬라이드">‹</button>
+    <span class="counter" aria-live="polite">1 / 15</span>
+    <button type="button" data-action="next" aria-label="다음 슬라이드">›</button>
+    <button class="print" type="button" data-action="print">PDF 내보내기</button>
+  </div>
+  <div class="progress" aria-hidden="true"><span></span></div>
+
+  <main class="deck">
+    <section class="slide is-active" id="slide-1">
+      <header>
+        <p class="kicker">HSPACE LiveFire A&amp;D</p>
+        <h1>대회 안내</h1>
+        <p class="lead">서비스 발표, A&amp;D 진행 방식, 방어 서비스 스왑, 부정행위 기준만 크게 정리합니다.</p>
+      </header>
+      <div class="body">
+        <div class="route reveal">
+          <div class="card"><b>서비스</b><span>무엇을 만들었나</span></div>
+          <div class="card"><b>A&amp;D</b><span>어떻게 점수화되나</span></div>
+          <div class="card"><b>스왑</b><span>누가 누구를 지키나</span></div>
+          <div class="card"><b>공정성</b><span>무엇이 무효인가</span></div>
+        </div>
+      </div>
+      <footer class="footer"><span>Competition guide</span><span>01</span></footer>
+    </section>
+
+    <section class="slide" id="slide-2">
+      <header>
+        <p class="kicker">오늘 진행</p>
+        <h2>발표가 끝나면 바로 경기 모드입니다.</h2>
+      </header>
+      <div class="body">
+        <div class="metric-grid reveal">
+          <div class="metric"><strong>19:00</strong><span>서비스 발표</span></div>
+          <div class="metric"><strong>19:30</strong><span>A&amp;D 준비</span></div>
+          <div class="metric"><strong>20:00</strong><span>라운드 시작</span></div>
+          <div class="metric"><strong>06:00</strong><span>경기 종료</span></div>
+        </div>
+        <div class="callout good reveal">공식 판정은 coordinator 기록 기준입니다.</div>
+      </div>
+      <footer class="footer"><span>Timeline</span><span>02</span></footer>
+    </section>
+
+    <section class="slide" id="slide-3">
+      <header>
+        <p class="kicker">서비스 발표</p>
+        <h2>취약점 풀이가 아니라 서비스 소개입니다.</h2>
+      </header>
+      <div class="body grid-3">
+        <article class="card reveal">
+          <h3>서비스 컨셉</h3>
+          <p>누가 어떤 목적으로 쓰는 서비스인지 설명합니다.</p>
+        </article>
+        <article class="card reveal">
+          <h3>정상 기능</h3>
+          <p>살아 있어야 하는 주요 기능과 사용 흐름을 보여줍니다.</p>
+        </article>
+        <article class="card reveal">
+          <h3>공격 표면</h3>
+          <p>입력, 저장, 조회 같은 구조만 설명합니다.</p>
+        </article>
+        <div class="callout reveal" style="grid-column: 1 / -1;">payload, flag 회수 방법, PoC 코드는 공개하지 않습니다.</div>
+      </div>
+      <footer class="footer"><span>Service presentation</span><span>03</span></footer>
+    </section>
+
+    <section class="slide" id="slide-4">
+      <header>
+        <p class="kicker">서비스 제출 계약</p>
+        <h2>세 가지가 없으면 공식 실행이 어렵습니다.</h2>
+      </header>
+      <div class="body split">
+        <ul class="list reveal">
+          <li><strong>Dockerfile</strong>로 빌드/실행 가능</li>
+          <li><strong>vuln_spec.json</strong>에 검증 요청 선언</li>
+          <li><strong>서비스 코드</strong>와 취약점 4개 포함</li>
+        </ul>
+        <div class="card reveal">
+          <h3>취약점 ID는 고정</h3>
+          <p><span class="red">vuln1</span>, <span class="red">vuln2</span>, <span class="red">vuln3</span>, <span class="red">vuln4</span></p>
+          <p style="margin-top: 20px;">API 경로는 자유지만 검증은 재현 가능해야 합니다.</p>
+        </div>
+      </div>
+      <footer class="footer"><span>Submission contract</span><span>04</span></footer>
+    </section>
+
+    <section class="slide" id="slide-5">
+      <header>
+        <p class="kicker">A&amp;D 한 라운드</p>
+        <h2>agent가 찾고, runner가 재현하고, coordinator가 채점합니다.</h2>
+      </header>
+      <div class="body">
+        <div class="flow reveal">
+          <div class="card"><b>Flag 주입</b><span>라운드마다 새 flag</span></div>
+          <div class="card"><b>공격 탐색</b><span>attack agent 실행</span></div>
+          <div class="card"><b>PoC 제출</b><span>재현 코드 제출</span></div>
+          <div class="card"><b>Runner 실행</b><span>격리 환경 검증</span></div>
+          <div class="card"><b>점수 반영</b><span>성공만 기록</span></div>
+        </div>
+      </div>
+      <footer class="footer"><span>Round lifecycle</span><span>05</span></footer>
+    </section>
+
+    <section class="slide" id="slide-6">
+      <header>
+        <p class="kicker">공격 / PoC</p>
+        <h2>사람이 직접 제출한 PoC는 점수로 인정하지 않습니다.</h2>
+      </header>
+      <div class="body split">
+        <ul class="list reveal">
+          <li>공격 요청은 공식 wrapper 경유</li>
+          <li>라운드당 팀별 탐색 10턴</li>
+          <li>PoC는 runner에서 독립 실행</li>
+          <li>마지막 출력 줄에 현재 flag</li>
+        </ul>
+        <div class="terminal reveal">
+          <div class="terminal-bar"><span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span></div>
+          <pre>PoC 성공 조건
+1. 재현 가능한 Python 파일
+2. 공식 runner에서 실행
+3. 현재 flag를 마지막 줄에 출력</pre>
+        </div>
+      </div>
+      <footer class="footer"><span>Attack path</span><span>06</span></footer>
+    </section>
+
+    <section class="slide" id="slide-7">
+      <header>
+        <p class="kicker">방어</p>
+        <h2>방어 패치는 배정된 repo에만 가능합니다.</h2>
+      </header>
+      <div class="body split">
+        <div class="stack reveal">
+          <div class="row"><strong>분석</strong><span>배정된 서비스 repo와 로그만 기준으로 봅니다.</span></div>
+          <div class="row"><strong>패치</strong><span>취약점은 막고 기본 기능은 유지합니다.</span></div>
+          <div class="row"><strong>제출</strong><span>공식 실행 기록이 붙은 commit만 인정됩니다.</span></div>
+        </div>
+        <div class="callout reveal">수동 push, 수동 패치, 경기 중 명세 변경은 방어 결과로 인정되지 않습니다.</div>
+      </div>
+      <footer class="footer"><span>Defense path</span><span>07</span></footer>
+    </section>
+
+    <section class="slide" id="slide-8">
+      <header>
+        <p class="kicker">점수</p>
+        <h2>공격, 방어, 가용성이 동시에 움직입니다.</h2>
+      </header>
+      <div class="body">
+        <div class="metric-grid reveal">
+          <div class="metric"><strong>1000</strong><span>시작 점수</span></div>
+          <div class="metric"><strong>+10</strong><span>PoC 성공 공격팀</span></div>
+          <div class="metric"><strong>-10</strong><span>뚫린 서비스의 방어팀</span></div>
+          <div class="metric"><strong>+10</strong><span>서비스 OK 소유팀</span></div>
+        </div>
+        <div class="callout good reveal">서비스 DOWN이면 가용성 보너스가 없습니다.</div>
+      </div>
+      <footer class="footer"><span>Scoring</span><span>08</span></footer>
+    </section>
+
+    <section class="slide" id="slide-9">
+      <header>
+        <p class="kicker">특별규칙</p>
+        <h2>내 서비스와 내가 방어하는 서비스는 다릅니다.</h2>
+      </header>
+      <div class="body split">
+        <div class="swap reveal">
+          <div class="team"><strong>team1</strong><span>team6 방어</span></div>
+          <div class="team"><strong>team2</strong><span>team1 방어</span></div>
+          <div class="team"><strong>team3</strong><span>team2 방어</span></div>
+          <div class="team"><strong>team4</strong><span>team3 방어</span></div>
+          <div class="team"><strong>team5</strong><span>team4 방어</span></div>
+          <div class="team"><strong>team6</strong><span>team5 방어</span></div>
+        </div>
+        <div class="callout reveal">예: team1 서비스가 뚫리면 team2가 방어 실패 감점을 받습니다.</div>
+      </div>
+      <footer class="footer"><span>Defense swap</span><span>09</span></footer>
+    </section>
+
+    <section class="slide" id="slide-10">
+      <header>
+        <p class="kicker">공격 대상 제한</p>
+        <h2>자기 서비스와 자기 방어 대상은 공격할 수 없습니다.</h2>
+      </header>
+      <div class="body split">
+        <table class="table reveal">
+          <thead>
+            <tr><th>공격팀</th><th>공격 금지</th><th>공격 가능</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>team1</td><td>team1, team6</td><td>4개</td></tr>
+            <tr><td>team2</td><td>team2, team1</td><td>4개</td></tr>
+            <tr><td>team3</td><td>team3, team2</td><td>4개</td></tr>
+            <tr><td>team4</td><td>team4, team3</td><td>4개</td></tr>
+            <tr><td>team5</td><td>team5, team4</td><td>4개</td></tr>
+            <tr><td>team6</td><td>team6, team5</td><td>4개</td></tr>
+          </tbody>
+        </table>
+        <div class="callout good reveal">대상 검증은 coordinator가 자동으로 막습니다.</div>
+      </div>
+      <footer class="footer"><span>Allowed targets</span><span>10</span></footer>
+    </section>
+
+    <section class="slide" id="slide-11">
+      <header>
+        <p class="kicker">공식 경로</p>
+        <h2>점수 인정은 공식 실행 기록이 있는 결과만 됩니다.</h2>
+      </header>
+      <div class="body grid-4">
+        <article class="rule reveal">
+          <h3>공식 실행</h3>
+          <p>운영 서버가 시작한 agent 실행</p>
+        </article>
+        <article class="rule reveal">
+          <h3>공식 LLM 경로</h3>
+          <p>주입된 내부 경로만 사용</p>
+        </article>
+        <article class="rule reveal">
+          <h3>공식 공격 경로</h3>
+          <p>서비스 접근은 wrapper 기록 필수</p>
+        </article>
+        <article class="rule reveal">
+          <h3>공식 PoC 경로</h3>
+          <p>제출과 실행 기록이 있어야 인정</p>
+        </article>
+      </div>
+      <footer class="footer"><span>Official path</span><span>11</span></footer>
+    </section>
+
+    <section class="slide" id="slide-12">
+      <header>
+        <p class="kicker">부정행위 기준</p>
+        <h2>운영 인프라와 다른 팀 비밀값은 공격 대상이 아닙니다.</h2>
+      </header>
+      <div class="body grid-3">
+        <article class="rule reveal">
+          <h3>운영 인프라 공격 금지</h3>
+          <p>coordinator, gateway, runner, Docker host는 경기 대상이 아닙니다.</p>
+        </article>
+        <article class="rule reveal">
+          <h3>DoS 금지</h3>
+          <p>서비스를 고의로 다운시키는 트래픽과 리소스 고갈은 금지입니다.</p>
+        </article>
+        <article class="rule reveal">
+          <h3>인증값 탈취 금지</h3>
+          <p>다른 팀의 제출 권한, 방어 권한, 내부 비밀값 사용은 금지입니다.</p>
+        </article>
+        <article class="rule reveal">
+          <h3>repo 우회 접근 금지</h3>
+          <p>허용되지 않은 repo clone/fetch 시도는 금지입니다.</p>
+        </article>
+        <article class="rule reveal">
+          <h3>외부 공유 금지</h3>
+          <p>flag, exploit, PoC, 내부 비밀값을 외부로 공유하지 않습니다.</p>
+        </article>
+        <article class="rule reveal">
+          <h3>비밀값 commit 금지</h3>
+          <p>flag, API key, 비밀키 등은 git에 올리지 않습니다.</p>
+        </article>
+      </div>
+      <footer class="footer"><span>Fair play</span><span>12</span></footer>
+    </section>
+
+    <section class="slide" id="slide-13">
+      <header>
+        <p class="kicker">AI 사용 규칙</p>
+        <h2>공식 라운드에서는 허용 모델만 사용합니다.</h2>
+      </header>
+      <div class="body split">
+        <div class="chip-row reveal">
+          <span class="chip good">gpt-4o-mini</span>
+          <span class="chip good">gemini flash</span>
+          <span class="chip good">qwen 2.5 14b</span>
+          <span class="chip good">phi-4</span>
+          <span class="chip good">mistral small</span>
+          <span class="chip good">mimo</span>
+        </div>
+        <ul class="list reveal">
+          <li>외부 AI API 직접 호출 금지</li>
+          <li>개인 API key 사용 금지</li>
+          <li>목록 밖 모델은 서버가 거절</li>
+        </ul>
+      </div>
+      <footer class="footer"><span>AI rules</span><span>13</span></footer>
+    </section>
+
+    <section class="slide" id="slide-14">
+      <header>
+        <p class="kicker">무효 처리</p>
+        <h2>기술적으로 성공해도 공식 기록이 없으면 무효입니다.</h2>
+      </header>
+      <div class="body grid-2">
+        <article class="rule reveal">
+          <h3>수동 PoC 제출</h3>
+          <p>라운드 중 사람이 직접 낸 PoC는 공격 점수가 아닙니다.</p>
+        </article>
+        <article class="rule reveal">
+          <h3>수동 방어 push</h3>
+          <p>공식 실행 기록이 없는 패치는 방어 결과가 아닙니다.</p>
+        </article>
+        <article class="rule reveal">
+          <h3>잘못된 PoC 출력</h3>
+          <p>현재 flag가 마지막 줄에 없으면 실패입니다.</p>
+        </article>
+        <article class="rule reveal">
+          <h3>명세 변경</h3>
+          <p>경기 중 취약점 명세 변경은 거절됩니다.</p>
+        </article>
+      </div>
+      <footer class="footer"><span>Invalid results</span><span>14</span></footer>
+    </section>
+
+    <section class="slide" id="slide-15">
+      <header>
+        <p class="kicker">마지막 확인</p>
+        <h2>서비스는 소개하고, 공격과 방어는 agent에게 맡깁니다.</h2>
+      </header>
+      <div class="body split">
+        <ul class="list reveal">
+          <li><strong>서비스 발표</strong>: 기능 중심</li>
+          <li><strong>A&amp;D</strong>: 공식 agent만 인정</li>
+          <li><strong>스왑</strong>: 내가 방어하는 서비스 확인</li>
+          <li><strong>공정성</strong>: 공식 기록 없는 결과는 무효</li>
+        </ul>
+        <div class="terminal reveal">
+          <div class="terminal-bar"><span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span></div>
+          <pre>ready:
+  service: running
+  vuln_spec: locked
+  agent: official path
+
+start: 20:00 KST</pre>
+        </div>
+      </div>
+      <footer class="footer"><span>Close</span><span>15</span></footer>
+    </section>
+  </main>
+
+  <script>
+    const slides = Array.from(document.querySelectorAll(".slide"));
+    const counter = document.querySelector(".counter");
+    const progress = document.querySelector(".progress span");
+    let current = 0;
+
+    function setActive(index, shouldScroll = true) {
+      current = Math.max(0, Math.min(index, slides.length - 1));
+      slides.forEach((slide, slideIndex) => {
+        slide.classList.toggle("is-active", slideIndex === current);
+      });
+      counter.textContent = `${current + 1} / ${slides.length}`;
+      progress.style.transform = `scaleX(${(current + 1) / slides.length})`;
+      if (shouldScroll) {
+        slides[current].scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+      history.replaceState(null, "", `#slide-${current + 1}`);
+    }
+
+    document.querySelector('[data-action="prev"]').addEventListener("click", () => setActive(current - 1));
+    document.querySelector('[data-action="next"]').addEventListener("click", () => setActive(current + 1));
+    document.querySelector('[data-action="print"]').addEventListener("click", () => window.print());
+
+    window.addEventListener("keydown", (event) => {
+      if (event.defaultPrevented) return;
+      if (event.key === "ArrowRight" || event.key === "PageDown" || event.key === " ") {
+        event.preventDefault();
+        setActive(current + 1);
+      }
+      if (event.key === "ArrowLeft" || event.key === "PageUp") {
+        event.preventDefault();
+        setActive(current - 1);
+      }
+      if (event.key === "Home") {
+        event.preventDefault();
+        setActive(0);
+      }
+      if (event.key === "End") {
+        event.preventDefault();
+        setActive(slides.length - 1);
+      }
+      if (event.key.toLowerCase() === "p") {
+        event.preventDefault();
+        window.print();
+      }
+    });
+
+    const observer = new IntersectionObserver((entries) => {
+      const visible = entries
+        .filter((entry) => entry.isIntersecting)
+        .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+      if (!visible) return;
+      const index = slides.indexOf(visible.target);
+      if (index >= 0 && index !== current) {
+        setActive(index, false);
+      }
+    }, { threshold: [0.55, 0.72, 0.88] });
+
+    slides.forEach((slide) => observer.observe(slide));
+
+    const match = location.hash.match(/^#slide-(\d+)$/);
+    setActive(match ? Number(match[1]) - 1 : 0, Boolean(match));
+  </script>
+</body>
+</html>

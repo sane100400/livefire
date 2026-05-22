@@ -24,7 +24,7 @@ UPDATE_CACHE_DIR = Path(os.getenv("GITCTF_CACHE_DIR", "~/.cache/hspace-gitctf"))
 DEFAULT_UPDATE_URL = ""
 COMMON_FLOW = """참가자 기본 흐름:
   1. 팀 로그인 저장
-     python scripts/gitctf.py login teamA --token <TEAM_TOKEN> --coordinator http://HOST:9000
+     python scripts/gitctf.py login team1 --token <TEAM_TOKEN> --coordinator http://knights.hspace.io:42000
 
   2. 서비스 폴더로 이동
      cd <서비스_폴더>
@@ -36,7 +36,7 @@ COMMON_FLOW = """참가자 기본 흐름:
      python ../scripts/gitctf.py push
 
 에이전트 기본 흐름:
-  python scripts/gitctf.py agent build teamA
+  python scripts/gitctf.py agent build team1
   python scripts/gitctf.py agent doctor --mode attack
 
 관리자 기본 흐름:
@@ -86,11 +86,24 @@ def _load_config_quietly() -> dict:
 
 
 def _coordinator_from_argv(argv: list[str]) -> str | None:
-    return (
+    coordinator = (
         _extract_cli_option(argv, "--coordinator")
         or os.getenv("COORDINATOR_URL")
         or _load_config_quietly().get("coordinator")
     )
+    if coordinator:
+        return coordinator
+    for path in (Path.cwd() / "gitctf.env", Path.cwd() / ".env"):
+        if not path.exists():
+            continue
+        try:
+            for raw in path.read_text(encoding="utf-8").splitlines():
+                line = raw.strip()
+                if line.startswith("COORDINATOR_URL="):
+                    return line.split("=", 1)[1].strip().strip('"').strip("'")
+        except OSError:
+            continue
+    return None
 
 
 def _update_url_from_context(argv: list[str]) -> str | None:
@@ -179,7 +192,7 @@ def _json_request(
 
 
 def _coordinator_setting(cli_value: str | None = None) -> str:
-    coordinator = cli_value or os.getenv("COORDINATOR_URL") or _load_config_quietly().get("coordinator") or "http://localhost:9000"
+    coordinator = cli_value or os.getenv("COORDINATOR_URL") or _load_config_quietly().get("coordinator") or "http://localhost:42000"
     _validate_coordinator(coordinator)
     return coordinator.rstrip("/")
 
@@ -347,7 +360,12 @@ def _load_env_file(path: Path) -> None:
 
 def _load_local_env(repo: Path) -> None:
     seen: set[Path] = set()
-    for path in (Path.cwd() / ".env", repo / ".env"):
+    for path in (
+        Path.cwd() / "gitctf.env",
+        repo / "gitctf.env",
+        Path.cwd() / ".env",
+        repo / ".env",
+    ):
         resolved = path.resolve()
         if resolved not in seen:
             _load_env_file(resolved)
@@ -367,8 +385,8 @@ def _resolve_setting(
     if required and not value:
         raise SystemExit(
             f"{name} 값이 필요합니다.\n"
-            f"해결: `python scripts/gitctf.py login teamA --token <TEAM_TOKEN> "
-            f"--coordinator http://HOST:9000`을 먼저 실행하거나 {env_name} 환경변수를 설정하세요."
+            f"해결: `python scripts/gitctf.py login team1 --token <TEAM_TOKEN> "
+            f"--coordinator http://knights.hspace.io:42000`을 먼저 실행하거나 {env_name} 환경변수를 설정하세요."
         )
     return value
 
@@ -426,15 +444,16 @@ def _basic_auth_header(team: str, token: str) -> str:
 def _validate_coordinator(url: str) -> None:
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise SystemExit("--coordinator는 http://HOST:9000 같은 주소여야 합니다.")
+        raise SystemExit("--coordinator는 http://knights.hspace.io:42000 같은 주소여야 합니다.")
 
 
 def login(args: argparse.Namespace) -> int:
+    _load_local_env(Path.cwd())
     config = _load_config()
     team = args.team or os.getenv("TEAM_ID") or config.get("team")
     if not team:
-        raise SystemExit("ERROR: team is required, for example: python scripts/gitctf.py login teamA")
-    coordinator = args.coordinator or os.getenv("COORDINATOR_URL") or config.get("coordinator") or "http://localhost:9000"
+        raise SystemExit("ERROR: team is required, for example: python scripts/gitctf.py login team1")
+    coordinator = args.coordinator or os.getenv("COORDINATOR_URL") or config.get("coordinator") or "http://localhost:42000"
     _validate_coordinator(coordinator)
 
     token = args.token or os.getenv("TEAM_TOKEN")
@@ -473,7 +492,7 @@ def submit(args: argparse.Namespace) -> int:
         "COORDINATOR_URL",
         "coordinator",
         config,
-        default="http://localhost:9000",
+        default="http://localhost:42000",
     )
     assert team is not None and token is not None and coordinator is not None
     _validate_coordinator(coordinator)
@@ -675,10 +694,10 @@ def admin_bundle(args: argparse.Namespace) -> int:
 def agent_delegate(args: argparse.Namespace) -> int:
     if not args.agent_args:
         print("agent 명령 예시:")
-        print("  python scripts/gitctf.py agent build teamA")
-        print("  python scripts/gitctf.py agent config teamA")
+        print("  python scripts/gitctf.py agent build team1")
+        print("  python scripts/gitctf.py agent config team1")
         print("  python scripts/gitctf.py agent doctor --mode attack")
-        print("  python scripts/gitctf.py agent run attack --team teamA --target teamC --token <TOKEN> --runner-secret <RUNNER_SECRET>")
+        print("  python scripts/gitctf.py agent run attack --team team1 --target team3 --token <TOKEN> --runner-secret <RUNNER_SECRET>")
         return 0
     cmd = [sys.executable, str(_support_script("agent.py")), *args.agent_args]
     return _run(cmd, cwd=Path.cwd(), check=False).returncode
@@ -697,12 +716,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="팀 토큰과 coordinator 주소를 저장",
         description="팀 토큰과 coordinator 주소를 저장합니다. 이후 check/push에서 반복 입력하지 않아도 됩니다.",
     )
-    login_parser.add_argument("team", nargs="?", help="팀 ID, 예: teamA")
+    login_parser.add_argument("team", nargs="?", help="팀 ID, 예: team1")
     login_parser.add_argument("--token", help="팀 토큰. 생략하면 터미널에서 숨김 입력으로 받습니다.")
     login_parser.add_argument(
         "--coordinator",
         default=os.getenv("COORDINATOR_URL"),
-        help="coordinator 주소. 기본값: COORDINATOR_URL, 저장된 설정, 또는 http://localhost:9000",
+        help="coordinator 주소. 기본값: COORDINATOR_URL, 저장된 설정, 또는 http://localhost:42000",
     )
     login_parser.set_defaults(func=login)
 
@@ -771,15 +790,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="attack/defense agent 빌드와 로컬 디버그",
         description=(
             "agent helper를 gitctf.py 안에서 실행합니다.\n"
-            "예: python scripts/gitctf.py agent build teamA\n"
+            "예: python scripts/gitctf.py agent build team1\n"
             "예: python scripts/gitctf.py agent doctor --mode attack"
         ),
         epilog=(
             "주요 명령:\n"
-            "  build teamA                         attack/defense 이미지 빌드\n"
-            "  config teamA                        coordinator 설정용 이미지 이름 출력\n"
+            "  build team1                         attack/defense 이미지 빌드\n"
+            "  config team1                        coordinator 설정용 이미지 이름 출력\n"
             "  doctor --mode attack                runner entrypoint 확인\n"
-            "  run attack --team teamA --target teamC --token <TOKEN> --runner-secret <RUNNER_SECRET>\n"
+            "  run attack --team team1 --target team3 --token <TOKEN> --runner-secret <RUNNER_SECRET>\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -795,11 +814,11 @@ def build_parser() -> argparse.ArgumentParser:
     admin_sub.required = True
 
     status_parser = admin_sub.add_parser("status", help="coordinator와 점수판 상태 확인")
-    status_parser.add_argument("--coordinator", default=None, help="기본값: COORDINATOR_URL 또는 http://localhost:9000")
+    status_parser.add_argument("--coordinator", default=None, help="기본값: COORDINATOR_URL 또는 http://localhost:42000")
     status_parser.set_defaults(func=admin_status)
 
     preflight_parser = admin_sub.add_parser("preflight", help="행사 시작 전 전체 사전검증")
-    preflight_parser.add_argument("--coordinator", default=None, help="기본값: COORDINATOR_URL 또는 http://localhost:9000")
+    preflight_parser.add_argument("--coordinator", default=None, help="기본값: COORDINATOR_URL 또는 http://localhost:42000")
     preflight_parser.add_argument("--admin-secret", default=None, help="기본값: ADMIN_SECRET 또는 coordinator/.env")
     preflight_parser.add_argument("--hosts-file", metavar="PATH", help="팀 IP 매핑 JSON")
     preflight_parser.add_argument("--port", type=int, default=8000, help="팀 서비스 포트. 기본값: 8000")
@@ -810,7 +829,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     round_parser = admin_sub.add_parser("round", help="라운드 시작/종료/다음 라운드 진행")
     round_parser.add_argument("action", nargs="?", choices=["next", "start", "end"], default="next")
-    round_parser.add_argument("--coordinator", default=None, help="기본값: COORDINATOR_URL 또는 http://localhost:9000")
+    round_parser.add_argument("--coordinator", default=None, help="기본값: COORDINATOR_URL 또는 http://localhost:42000")
     round_parser.add_argument("--admin-secret", default=None, help="기본값: ADMIN_SECRET 또는 coordinator/.env")
     round_parser.add_argument("--force", action="store_true", help="preflight 미완료 상태에서도 start-round 실행")
     round_parser.set_defaults(func=admin_round)

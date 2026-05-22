@@ -1,6 +1,6 @@
 # ── 네트워크 ────────────────────────────────────────────────────────────
-# scoring-net : coordinator 전용 관리 플레인 (팀 서비스는 진입 불가)
-# target-net  : 팀 서비스 7개 (coordinator가 공격 라우팅용으로 접근)
+# scoring-net : gateway/coordinator 전용 관리 플레인 (팀 서비스는 진입 불가)
+# target-net  : 팀 서비스 6개 (coordinator가 공격 라우팅용으로 접근)
 #
 # 공격 에이전트 컨테이너는 agent_runner.py가 docker run 으로 직접 띄우며
 # scoring-net 에만 연결 → /attack 호출 가능, 타겟 서비스 직접 접근 불가
@@ -20,7 +20,47 @@ networks:
   egress-net:
     driver: bridge
 
+x-team-service-base: &team-service-base
+  profiles:
+    - mock
+  build: ./web_service
+  environment:
+    - CHECKER_TOKEN=${CHECKER_TOKEN:-checker-token-changeme}
+  restart: unless-stopped
+  deploy:
+    resources:
+      limits:
+        cpus: "0.5"
+        memory: "1G"
+
 services:
+
+  # ── Public CLI/API Gateway ───────────────────────────────────────────
+  # 외부 공개 포트는 42000 하나만 사용한다.
+  # / 는 CLI용 plain-text 안내만 반환하고, /scoreboard /status /git /admin /agent 등은 coordinator로 라우팅한다.
+  gateway:
+    image: nginx:alpine
+    depends_on:
+      - coordinator
+    volumes:
+      - ./gateway/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./user_deploy:/srv/user_deploy:ro
+      - ./dist:/srv/dist:ro
+    ports:
+      - "42000:80"
+      - "42001:42001"
+      - "42002:42002"
+      - "42003:42003"
+      - "42004:42004"
+      - "42005:42005"
+      - "42006:42006"
+    networks:
+      scoring-net:
+        ipv4_address: 10.89.20.3
+      target-net:
+        ipv4_address: 10.89.21.3
+      egress-net: {}
+    restart: unless-stopped
 
   # ── Coordinator ───────────────────────────────────────────────────────
   coordinator:
@@ -31,8 +71,8 @@ services:
       target-net:
         ipv4_address: 10.89.21.2    # 팀 서비스로 아웃바운드 전용
       egress-net: {}                 # OpenRouter egress 전용
-    ports:
-      - "9000:9000"                  # 스코어보드/공격 엔드포인트 (호스트 접근)
+    expose:
+      - "9000"                       # gateway/agent 내부 접근 전용
     env_file: ./coordinator/.env
     environment:
       - COORDINATOR_URL=http://10.89.20.2:9000
@@ -64,89 +104,41 @@ services:
           cpus: "1.0"
           memory: "512M"
 
-  # ── Scoreboard (static HTML) ──────────────────────────────────────────
-  scoreboard:
-    image: nginx:alpine
-    volumes:
-      - ./scoreboard:/usr/share/nginx/html:ro
-    ports:
-      - "8080:80"
+  # ── Team Services ───────────────────────────────────────────────────
+  # 각 팀 서비스는 target-net에만 연결 — coordinator admin 포트 도달 불가.
+  # 외부 팀 포트는 서비스별로 1개씩만 공개한다.
+  team1-service:
+    <<: *team-service-base
     networks:
-      - egress-net
-    restart: unless-stopped
+      target-net:
+        ipv4_address: 10.89.21.10
 
-  # ── Team Services (행사 전 팀 이미지 빌드 후 주석 해제) ───────────────
-  # 각 팀 서비스는 target-net에만 연결 — coordinator admin 포트 도달 불가
-  #
-  # teamA-service:
-  #   image: and-service-teama:latest
-  #   networks:
-  #     target-net:
-  #       ipv4_address: 10.89.21.10
-  #   ports:
-  #     - "8001:8000"
-  #   restart: on-failure:3
-  #   deploy:
-  #     resources:
-  #       limits:
-  #         cpus: "0.5"
-  #         memory: "1G"
-  #
-  # teamB-service:
-  #   image: and-service-teamb:latest
-  #   networks:
-  #     target-net:
-  #       ipv4_address: 10.89.21.11
-  #   ports:
-  #     - "8002:8000"
-  #   restart: on-failure:3
-  #   deploy:
-  #     resources:
-  #       limits:
-  #         cpus: "0.5"
-  #         memory: "1G"
-  #
-  # teamC-service:
-  #   image: and-service-teamc:latest
-  #   networks:
-  #     target-net:
-  #       ipv4_address: 10.89.21.12
-  #   ports:
-  #     - "8003:8000"
-  #   restart: on-failure:3
-  #
-  # teamD-service:
-  #   image: and-service-teamd:latest
-  #   networks:
-  #     target-net:
-  #       ipv4_address: 10.89.21.13
-  #   ports:
-  #     - "8004:8000"
-  #   restart: on-failure:3
-  #
-  # teamE-service:
-  #   image: and-service-teame:latest
-  #   networks:
-  #     target-net:
-  #       ipv4_address: 10.89.21.14
-  #   ports:
-  #     - "8005:8000"
-  #   restart: on-failure:3
-  #
-  # teamF-service:
-  #   image: and-service-teamf:latest
-  #   networks:
-  #     target-net:
-  #       ipv4_address: 10.89.21.15
-  #   ports:
-  #     - "8006:8000"
-  #   restart: on-failure:3
-  #
-  # teamG-service:
-  #   image: and-service-teamg:latest
-  #   networks:
-  #     target-net:
-  #       ipv4_address: 10.89.21.16
-  #   ports:
-  #     - "8007:8000"
-  #   restart: on-failure:3
+  team2-service:
+    <<: *team-service-base
+    networks:
+      target-net:
+        ipv4_address: 10.89.21.11
+
+  team3-service:
+    <<: *team-service-base
+    networks:
+      target-net:
+        ipv4_address: 10.89.21.12
+
+  team4-service:
+    <<: *team-service-base
+    networks:
+      target-net:
+        ipv4_address: 10.89.21.13
+
+  team5-service:
+    <<: *team-service-base
+    networks:
+      target-net:
+        ipv4_address: 10.89.21.14
+
+  team6-service:
+    <<: *team-service-base
+    networks:
+      target-net:
+        ipv4_address: 10.89.21.15

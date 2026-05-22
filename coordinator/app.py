@@ -1,12 +1,16 @@
 import hashlib
 import hmac
 import json
+import os
 import secrets
 import time
 import httpx
 from fastapi import FastAPI, HTTPException, Header, Request, Query, UploadFile, File, Form
 from fastapi.responses import JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
+from limits import parse as parse_rate_limit
+from limits.storage import MemoryStorage
+from limits.strategies import FixedWindowRateLimiter
 from pydantic import BaseModel
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -26,7 +30,7 @@ from config import (
     TOTAL_ROUNDS, COORDINATOR_PORT, ADMIN_SECRET,
     TEAM_TOKENS, ATTACK_AGENT_IMAGES, COORDINATOR_URL,
     DEFENSE_TOKENS, DEFENSE_AGENT_IMAGES,
-    RUNNER_SECRET,
+    RUNNER_SECRET, CHECKER_TOKEN,
     ALLOWED_MODEL_PREFIXES,
     VULN_SPEC_DIR, DB_PATH,
     OPENROUTER_API_KEY, OPENROUTER_BASE_URL,
@@ -35,6 +39,9 @@ from config import (
     ALLOW_STUDENT_AGENT_RUNS, ALLOW_UNSAFE_AGENT_RUNS,
     MAX_LLM_MESSAGES, MAX_LLM_PROMPT_BYTES, MAX_LLM_MAX_TOKENS,
     MAX_ATTACK_REQUEST_BYTES, MAX_ATTACK_RESPONSE_BYTES,
+    RATE_LIMIT_ATTACK_AGENT_RUNS, RATE_LIMIT_DEFENSE_AGENT_RUNS,
+    RATE_LIMIT_REPO_ARCHIVE, RATE_LIMIT_LLM,
+    RATE_LIMIT_ATTACK, RATE_LIMIT_POC_SUBMIT, RATE_LIMIT_TOOLS,
 )
 from rotation import (
     assert_attack_allowed,
@@ -51,17 +58,39 @@ from scorer import (
 from agent_runner import run_attack_agents, run_defense_agents, stop_round_agents
 from poc_runner import run_pocs_for_round
 
-import os
-CHECKER_TOKEN = os.getenv("CHECKER_TOKEN", "checker-token-changeme")
 SDK_NAME = "hspace-agent-sdk/1"
 SDK_SIGNATURE_MAX_SKEW_SEC = 300
 
 
-def _team_token_key(request: Request) -> str:
-    return request.headers.get("X-Team-Token") or get_remote_address(request)
+def _limiter_secret_key(prefix: str, value: str) -> str:
+    return f"{prefix}:{hashlib.sha256(value.encode('utf-8')).hexdigest()[:20]}"
 
 
-limiter = Limiter(key_func=_team_token_key)
+def _rate_limit_key(request: Request) -> str:
+    run_token = request.headers.get("X-Agent-Run-Token")
+    if run_token:
+        return _limiter_secret_key("run", run_token)
+
+    authorization = request.headers.get("Authorization", "")
+    bearer_prefix = "Bearer "
+    if authorization.lower().startswith(bearer_prefix.lower()):
+        bearer = authorization[len(bearer_prefix):].strip()
+        if bearer:
+            return _limiter_secret_key("bearer", bearer)
+
+    team_token = request.headers.get("X-Team-Token")
+    if team_token:
+        return _limiter_secret_key("team", team_token)
+
+    admin_secret = request.headers.get("X-Admin-Secret")
+    if admin_secret:
+        return _limiter_secret_key("admin", admin_secret)
+
+    return f"ip:{get_remote_address(request)}"
+
+
+limiter = Limiter(key_func=_rate_limit_key)
+agent_run_limiter = FixedWindowRateLimiter(MemoryStorage())
 
 state = GameState(list(TEAMS.keys()), STARTING_SCORE)
 vuln_specs: dict = {}
@@ -97,7 +126,8 @@ def _tool_path(name: str) -> Path:
 
 
 @app.get("/tools/{name}", include_in_schema=False)
-def get_participant_tool(name: str):
+@limiter.limit(RATE_LIMIT_TOOLS)
+def get_participant_tool(request: Request, name: str):
     path = _tool_path(name)
     content = path.read_bytes()
     return Response(
@@ -440,8 +470,25 @@ def _create_agent_run_response(
     }
 
 
+def _agent_run_rate_limit_for_mode(mode: str) -> str:
+    if mode == "attack":
+        return RATE_LIMIT_ATTACK_AGENT_RUNS
+    if mode == "defense":
+        return RATE_LIMIT_DEFENSE_AGENT_RUNS
+    return RATE_LIMIT_ATTACK_AGENT_RUNS
+
+
+def _check_agent_run_rate_limit(request: Request, req: AgentRunCreateRequest) -> None:
+    raw_limit = _agent_run_rate_limit_for_mode(req.mode)
+    limit = parse_rate_limit(raw_limit)
+    key = f"agent-runs:{req.mode}:{_rate_limit_key(request)}"
+    if not agent_run_limiter.hit(limit, key):
+        raise HTTPException(429, f"agent run 생성 제한 초과 ({req.mode}: {raw_limit})")
+
+
 @app.post("/agent-runs")
 def create_agent_run(
+    request: Request,
     req: AgentRunCreateRequest,
     x_team_token: str = Header(...),
     x_runner_secret: str | None = Header(default=None),
@@ -451,17 +498,20 @@ def create_agent_run(
     _verify_runner_secret(x_runner_secret)
     if RUNNER_SECRET and x_agent_sdk != SDK_NAME:
         raise HTTPException(403, "Agent SDK 요청만 허용")
+    _check_agent_run_rate_limit(request, req)
     return _create_agent_run_response(req)
 
 
 @app.post("/student/agent-runs")
 def create_student_agent_run(
+    request: Request,
     req: AgentRunCreateRequest,
     x_team_token: str = Header(...),
 ):
     if not ALLOW_STUDENT_AGENT_RUNS:
         raise HTTPException(404, "student agent run endpoint disabled")
     verify_agent_token(req.team_id, req.mode, x_team_token)
+    _check_agent_run_rate_limit(request, req)
     return _create_agent_run_response(
         req,
         default_agent_image="student-web-ui",
@@ -505,6 +555,7 @@ def finish_agent_run_bearer(request: Request, req: AgentRunFinishRequest):
 
 
 @app.get("/agent-runs/{run_id}/target-repo.tar")
+@limiter.limit(RATE_LIMIT_REPO_ARCHIVE)
 def target_repo_archive(
     request: Request,
     run_id: str,
@@ -538,6 +589,7 @@ def target_repo_archive(
 
 
 @app.get("/agent/target-repo.tar")
+@limiter.limit(RATE_LIMIT_REPO_ARCHIVE)
 def target_repo_archive_bearer(request: Request):
     run = _require_bearer_run(request, mode="attack")
     if run["round_num"] != state.current_round:
@@ -678,6 +730,7 @@ async def _perform_llm_call(req: LLMRequest, extra_payload: dict[str, Any] | Non
 
 
 @app.post("/llm")
+@limiter.limit(RATE_LIMIT_LLM)
 async def llm_gateway(
     request: Request,
     req: LLMRequest,
@@ -738,11 +791,13 @@ async def _openrouter_chat_completions(request: Request) -> JSONResponse:
 
 
 @app.post("/openrouter/api/v1/chat/completions")
+@limiter.limit(RATE_LIMIT_LLM)
 async def openrouter_chat_completions(request: Request):
     return await _openrouter_chat_completions(request)
 
 
 @app.post("/v1/chat/completions")
+@limiter.limit(RATE_LIMIT_LLM)
 async def openai_compatible_chat_completions(request: Request):
     return await _openrouter_chat_completions(request)
 
@@ -911,7 +966,7 @@ async def _execute_attack(req: AttackRequest, run: dict, llm_call: dict) -> dict
 
 
 @app.post("/attack")
-@limiter.limit("20/minute")
+@limiter.limit(RATE_LIMIT_ATTACK)
 async def attack(
     request: Request,
     req: AttackRequest,
@@ -938,7 +993,7 @@ async def attack(
 
 
 @app.post("/agent/attack")
-@limiter.limit("20/minute")
+@limiter.limit(RATE_LIMIT_ATTACK)
 async def agent_attack(request: Request, req: AgentAttackActionRequest):
     run = _require_bearer_run(request, mode="attack")
     llm_call = _latest_or_requested_llm_call(run["id"], req.llm_call_id)
@@ -1085,6 +1140,7 @@ def _submit_poc_content(
 
 
 @app.post("/pocs")
+@limiter.limit(RATE_LIMIT_POC_SUBMIT)
 async def submit_poc(
     request: Request,
     agent_run_id: str = Form(...),
@@ -1123,6 +1179,7 @@ async def submit_poc(
 
 
 @app.post("/agent/pocs")
+@limiter.limit(RATE_LIMIT_POC_SUBMIT)
 async def submit_agent_poc(
     request: Request,
     flag_id: str = Form(...),

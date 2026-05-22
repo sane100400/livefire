@@ -2,8 +2,8 @@
 Team rotation helpers.
 
 The clockwise order is fixed in config.TEAM_ORDER:
-site owner teamA is defended by teamB, teamB by teamC, and so on.
-The default event uses teamA through teamG.
+site owner team1 is defended by team2, team2 by team3, and so on.
+The default event uses team1 through team6.
 """
 from __future__ import annotations
 

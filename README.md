@@ -2,7 +2,7 @@
 
 AI 에이전트가 웹 서비스를 공격하고 방어하는 Attack & Defense 해커톤 플랫폼입니다.
 
-팀은 취약점 4개가 들어 있는 웹 서비스를 제출합니다. 운영 서버는 라운드마다 flag를 주입하고, 공격 에이전트가 제출한 PoC를 직접 실행해서 점수를 계산합니다. 방어 에이전트는 배정받은 다른 팀 서비스를 패치합니다.
+팀은 취약점 4개가 들어 있는 웹 서비스를 제출합니다. 운영 서버는 라운드마다 flag를 주입하고, 공격 에이전트가 제출한 PoC를 직접 실행해서 점수를 계산합니다. 방어 에이전트는 시스템이 지정한 서비스를 패치합니다.
 
 ## 핵심만 보기
 
@@ -10,10 +10,10 @@ AI 에이전트가 웹 서비스를 공격하고 방어하는 Attack & Defense �
 
 | 대상 | 하는 일 | 명령 |
 |---|---|---|
-| 참가자 | 로그인 | `python scripts/gitctf.py login teamA --token <TOKEN> --coordinator http://HOST:9000` |
+| 참가자 | 로그인 | `python scripts/gitctf.py login team1 --token <TOKEN> --coordinator http://knights.hspace.io:42000` |
 | 참가자 | 서비스 검증 | `python ../scripts/gitctf.py check` |
 | 참가자 | 서비스 제출 | `python ../scripts/gitctf.py push` |
-| 참가자 | 에이전트 빌드 | `python scripts/gitctf.py agent build teamA` |
+| 참가자 | 에이전트 빌드 | `python scripts/gitctf.py agent build team1` |
 | 관리자 | 사전검증 | `python scripts/gitctf.py admin preflight --repeat 3` |
 | 관리자 | 라운드 진행 | `python scripts/gitctf.py admin round next` |
 | 관리자 | 상태 확인 | `python scripts/gitctf.py admin status` |
@@ -24,15 +24,21 @@ AI 에이전트가 웹 서비스를 공격하고 방어하는 Attack & Defense �
 scripts/setup_admin_env.sh
 # coordinator/.env의 OPENROUTER_API_KEY와 팀 IP를 확인
 docker compose up -d --build
-curl http://localhost:9000/health
+curl http://localhost:42000/health
 ```
 
 접속 주소:
 
 | 주소 | 용도 |
 |---|---|
-| `http://localhost:9000` | coordinator API |
-| `http://localhost:8080` | scoreboard |
+| `http://localhost:42000` | CLI/API 게이트웨이: coordinator API + plain-text 안내 |
+
+포트 할당:
+
+| 포트 | 용도 |
+|---:|---|
+| `42000` | 전체 관리용 gateway |
+| `42001`~`42006` | team1~team6 서비스 지급용 |
 
 행사 직전:
 
@@ -40,6 +46,8 @@ curl http://localhost:9000/health
 python scripts/gitctf.py admin preflight --repeat 3
 python scripts/gitctf.py admin round next
 ```
+
+서버 가용성 점검과 agent 요청 제한 운영값은 [SERVER_AVAILABILITY_GUIDE.md](SERVER_AVAILABILITY_GUIDE.md)를 기준으로 확인합니다.
 
 운영 중:
 
@@ -50,8 +58,11 @@ python scripts/gitctf.py admin round next
 
 ## 참가자 시작
 
-제출 순서는 **서비스 구현 → 취약점 4개 심기 → `vuln_spec.json` 작성 → 로컬 실행 → `check` PASS → `push`** 입니다.
-예시 서비스는 `web_service/`입니다. 현재 예시는 “쓰기 싫은 업무 도우미” 서비스이며, `vuln1`~`vuln4` 취약점 검증 흐름까지 포함합니다.
+로컬 실행과 `check`는 제출 전 자가검증용입니다. 공식 제출, 대회 당일 실행, 채점은 주최 측이 제공하는 대회 서버와 coordinator 기준으로 진행됩니다.
+대회 서버 접속 방법과 앱 배포 절차는 `USER_DEPLOY_GUIDE.md`와 `DISCORD_NOTICE.txt`를 기준으로 합니다.
+
+제출 순서는 **서비스 구현 → 취약점 4개 심기 → `vuln_spec.json` 작성 → 자가검증 → 대회 서버 배포 안내 확인 → `check` PASS → `push`** 입니다.
+예시 서비스는 `web_service/`입니다. 현재 예시는 기획서 기반 업무 도우미 서비스이며, `vuln1`~`vuln4` 취약점 검증 흐름까지 포함합니다.
 
 먼저 자기 서비스 폴더에서 아래 3가지를 준비합니다.
 
@@ -70,7 +81,7 @@ make run
 
 ```bash
 cd web_service
-python ../scripts/gitctf.py login teamA --token <TOKEN> --coordinator http://HOST:9000
+python ../scripts/gitctf.py login team1 --token <TOKEN> --coordinator http://knights.hspace.io:42000
 python ../scripts/gitctf.py check
 python ../scripts/gitctf.py push
 ```
@@ -106,6 +117,8 @@ python ../scripts/gitctf.py check --vuln 1 --poc poc.py
 
 attack/defense agent 준비와 로컬 디버그도 `scripts/gitctf.py` 안의 `agent` 명령만 사용하면 됩니다.
 agent 내부 오케스트레이션은 자유입니다. OpenAI/OpenRouter 호환 클라이언트는 주입된 `OPENAI_BASE_URL` 또는 `OPENROUTER_BASE_URL`을 쓰면 coordinator의 OpenRouter wrapper를 거칩니다.
+AI 모델 호출은 OpenRouter API 기반으로 동작하며, 실제 요청은 coordinator의 OpenRouter wrapper를 거칩니다.
+<span class="red-strong">대회 당일에는 허용 모델 목록에 있는 모델만 사용할 수 있으며, 목록 밖 모델은 서버가 거절합니다.</span>
 내부 helper인 `scripts/agent.py`는 coordinator를 알 수 있으면 `/tools/agent.py` 최신 공식본을 확인한 뒤 실행합니다.
 공식 run 생성은 `RUNNER_SECRET`이 없으면 서버가 거부하며, raw git clone/fetch도 인증된 팀/방어팀만 가능합니다.
 runner는 `agent_manifest.json`의 `attack`/`defense` entrypoint를 실행하므로 코드 위치를 바꿔도 manifest만 맞추면 같은 runner에서 동작합니다.
@@ -122,28 +135,11 @@ runner는 `agent_manifest.json`의 `attack`/`defense` entrypoint를 실행하므
 
 같은 `(round, poc_id)`는 한 번만 점수화됩니다.
 
-## 방어 로테이션
-
-각 팀은 자기 서비스가 아니라 옆 팀 서비스를 방어합니다.
-
-```text
-teamA 서비스 -> teamB 방어
-teamB 서비스 -> teamC 방어
-teamC 서비스 -> teamD 방어
-teamD 서비스 -> teamE 방어
-teamE 서비스 -> teamF 방어
-teamF 서비스 -> teamG 방어
-teamG 서비스 -> teamA 방어
-```
-
-공격 대상은 자기 서비스와 자기 방어 대상을 제외한 5개 서비스입니다.
-
 ## 주요 폴더
 
 | 경로 | 내용 |
 |---|---|
 | `coordinator/` | 라운드, flag, scoring, git push, PoC runner |
-| `scoreboard/` | 정적 점수판 |
 | `web_service/` | 참가자 서비스 예시 |
 | `attack_agent/` | 공격 에이전트 템플릿 |
 | `defense_agent/` | 방어 에이전트 템플릿 |
@@ -160,5 +156,6 @@ teamG 서비스 -> teamA 방어
 | [AGENT_USAGE.txt](AGENT_USAGE.txt) | agent 빌드와 디버그 |
 | [SCRIPT_USAGE.txt](SCRIPT_USAGE.txt) | 스크립트 빠른 사용법 |
 | [ORGANIZER_GUIDE.md](ORGANIZER_GUIDE.md) | 관리자 운영 |
+| [SERVER_AVAILABILITY_GUIDE.md](SERVER_AVAILABILITY_GUIDE.md) | 서버 가용성 점검과 요청 제한 |
 | [PROJECT_GUIDE.md](PROJECT_GUIDE.md) | 처음 보는 사람용 구조 설명 |
 | [DEVELOPMENT_SPEC.md](DEVELOPMENT_SPEC.md) | 내부 구현 상세 |

@@ -5,11 +5,11 @@
 
 ## 1분 요약
 
-- 참가팀은 "쓰기 싫은 사이트" 주제 안에서 자유롭게 웹 서비스를 만들고 취약점 4개를 심습니다. `web_service/`는 참고용 예시입니다.
+- 참가팀은 사전에 제공된 기획서를 바탕으로 웹 서비스를 구현하고 취약점 4개를 심습니다. `web_service/`는 참고용 예시입니다.
 - 운영자는 팀 서비스를 Docker 이미지로 올리고, `coordinator`를 통해 flag 주입, SLA 체크, PoC 실행, 점수 계산을 합니다.
 - 공격/방어 산출물은 팀 에이전트의 공식 run token과 coordinator wrapper에 묶이며, LLM 호출 기록과 산출물 해시가 남습니다.
 - 점수는 시스템이 제출된 PoC를 실행해 현재 flag 탈취를 확인하면 공격팀 `+10`, 방어팀 `-10`, 서비스가 정상 상태이면 가용성 `+10`입니다.
-- 실시간 현황은 `scoreboard/` 정적 UI가 보여줍니다.
+- 실시간 현황은 CLI 명령과 `/scoreboard` JSON API로 확인합니다.
 
 ## 실행 상태를 확인하는 가장 짧은 방법
 
@@ -21,8 +21,8 @@
 ```bash
 docker compose config --quiet
 docker compose up -d --build
-curl http://localhost:9000/health
-curl -I http://localhost:8080/
+curl http://localhost:42000/health
+curl http://localhost:42000/
 ```
 
 정상이라면 coordinator는 다음처럼 응답합니다.
@@ -31,12 +31,12 @@ curl -I http://localhost:8080/
 {"status":"ok","round":1,"round_active":false}
 ```
 
-브라우저에서 확인할 주소:
+CLI로 확인할 주소:
 
-- Coordinator API: `http://localhost:9000`
-- Scoreboard: `http://localhost:8080`
+- Coordinator API: `http://localhost:42000`
+- 점수 JSON: `http://localhost:42000/scoreboard`
 
-현재 `docker-compose.yml`에서 실제 팀 서비스 7개는 주석 처리되어 있습니다. 팀별 이미지가 준비된 뒤 `teamA-service`부터 `teamG-service`까지 주석을 해제해 운영 환경에 붙입니다.
+현재 `docker-compose.yml`에서 실제 팀 서비스 6개는 주석 처리되어 있습니다. 팀별 이미지가 준비된 뒤 `team1-service`부터 `team6-service`까지 주석을 해제해 운영 환경에 붙입니다.
 
 ### 예시 서비스 템플릿
 
@@ -67,7 +67,7 @@ python scripts/gitctf.py check --repo web_service --vuln 1 --poc poc.py
 python -m unittest discover -s tests -v
 ```
 
-이 테스트는 로테이션 규칙, PoC 채점 중복 방지, stdout 마지막 줄 flag 검증, 라운드 점수 계산, LLM gateway 호출 형태, spec 기반 검증 로직, SDK PoC 제출 로직을 확인합니다.
+이 테스트는 공격/방어 대상 제한, PoC 채점 중복 방지, stdout 마지막 줄 flag 검증, 라운드 점수 계산, LLM gateway 호출 형태, spec 기반 검증 로직, SDK PoC 제출 로직을 확인합니다.
 
 ## 현재 로컬 검증 결과
 
@@ -77,8 +77,8 @@ python -m unittest discover -s tests -v
 |---|---|
 | `python -m unittest discover -s tests -v` | 21개 테스트 통과 |
 | `docker compose config --quiet` | 통과 |
-| `curl http://localhost:9000/health` | `{"status":"ok","round":1,"round_active":false}` |
-| `curl -I http://localhost:8080/` | HTTP 200 |
+| `curl http://localhost:42000/health` | `{"status":"ok","round":1,"round_active":false}` |
+| `curl -I http://localhost:42000/` | HTTP 200 |
 | `python scripts/gitctf.py check --repo web_service --repeat 3` | `vuln1`~`vuln4` 전체 PASS |
 | `python scripts/gitctf.py check --repo web_service --vuln 1 --poc poc.py` | PoC runner 계약 검증 PASS |
 
@@ -105,7 +105,7 @@ target-net ───────────────┐
       └───────────────────┴───────────▶ score + audit log
                                       │
                                       ▼
-                                  scoreboard
+                                  score JSON
 ```
 
 핵심은 `coordinator`입니다. 팀 서비스에 flag를 주입하고, 에이전트 실행 기록을 만들고, LLM 호출을 프록시하며, 제출된 PoC를 라운드마다 다시 실행해서 점수를 계산합니다.
@@ -123,8 +123,7 @@ target-net ───────────────┐
 | `agent_manifest.json` | runner가 attack/defense agent entrypoint를 찾는 manifest입니다. 코드 위치를 바꾸면 이 파일을 맞춥니다. |
 | `scripts/gitctf.py` | 참가자 검증·제출과 운영자 상태 확인·사전검증·라운드 전환을 맡는 기본 CLI입니다. |
 | `scripts/validate_vulns.py` | `gitctf.py check`가 내부에서 사용하는 검증 엔진입니다. |
-| `scoreboard/` | 정적 HTML 스코어보드입니다. nginx로 `8080`에 서빙됩니다. |
-| `vuln_specs/` | 운영자가 검증할 팀별 취약점 spec 위치입니다. 실제 운영 전 `teamA.json` 같은 파일이 들어와야 합니다. |
+| `vuln_specs/` | 운영자가 검증할 팀별 취약점 spec 위치입니다. 실제 운영 전 `team1.json` 같은 파일이 들어와야 합니다. |
 | `user_deploy/` | 참가자에게 줄 배포 번들 생성 결과입니다. coordinator와 운영자 시크릿은 포함하지 않습니다. |
 | `tests/` | 핵심 규칙과 흐름을 검증하는 Python unittest입니다. |
 
@@ -137,7 +136,7 @@ target-net ───────────────┐
 5. 시스템이 제출된 PoC를 격리 환경에서 실행합니다.
 6. stdout의 마지막 non-empty line이 현재 라운드 flag이면 공격 성공으로 채점합니다.
 7. scorer가 PoC 점수와 가용성 보너스를 합산합니다.
-8. scoreboard가 최신 상태를 폴링해서 보여줍니다.
+8. 운영자가 `gitctf.py admin status` 또는 `/scoreboard` JSON API로 최신 상태를 확인합니다.
 
 ## 사람들에게 설명할 때 쓰는 말
 
@@ -151,9 +150,9 @@ target-net ───────────────┐
 
 ## 시연 순서
 
-1. `docker compose ps`로 `coordinator`와 `scoreboard`가 떠 있는지 보여줍니다.
-2. `curl http://localhost:9000/health`로 coordinator 상태를 보여줍니다.
-3. 브라우저에서 `http://localhost:8080` 스코어보드를 엽니다.
+1. `docker compose ps`로 `gateway`와 `coordinator`가 떠 있는지 보여줍니다.
+2. `curl http://localhost:42000/health`로 coordinator 상태를 보여줍니다.
+3. `curl -s http://localhost:42000/scoreboard | python3 -m json.tool`로 점수 JSON을 확인합니다.
 4. `web_service/main.py`가 자유 웹 서비스 예시일 뿐이라는 점과 예시 취약점 4개를 설명합니다.
 5. `python scripts/gitctf.py check --repo web_service --repeat 3`를 실행해 flag 주입, 탈취, 기본 기능 검증이 자동으로 도는 것을 보여줍니다.
 6. 필요하면 `python scripts/gitctf.py check --repo web_service --vuln 1 --poc poc.py` 형태로 PoC runner 계약을 보여줍니다.
@@ -167,14 +166,15 @@ target-net ───────────────┐
 2. `README.md` - 상세 규칙과 아키텍처
 3. `RULEBOOK.md` - 참가팀 입장에서 지켜야 할 규칙
 4. `ORGANIZER_GUIDE.md` - 운영자 체크리스트
-5. `DEVELOPMENT_SPEC.md` - 구현 상세와 내부 계약
-6. `SPEC_SLA_MONITOR.md` - SLA 모니터링 상세 설계
+5. `SERVER_AVAILABILITY_GUIDE.md` - 서버 가용성 점검과 agent 요청 제한
+6. `DEVELOPMENT_SPEC.md` - 구현 상세와 내부 계약
+7. `SPEC_SLA_MONITOR.md` - SLA 모니터링 상세 설계
 
 ## 아직 행사 전 확인해야 할 것
 
-- `coordinator/.env`에 운영용 `ADMIN_SECRET`, `TOKEN_TEAM_A`~`TOKEN_TEAM_G`, 필요 시 `OPENROUTER_API_KEY`, `RUNNER_SECRET`이 들어 있어야 합니다. 처음 세팅은 `scripts/setup_admin_env.sh`로 생성할 수 있습니다.
-- 팀별 서비스 이미지가 빌드되어야 하고, `docker-compose.yml`의 `teamA-service`~`teamG-service`가 실제 이미지 이름으로 연결되어야 합니다.
-- 팀별 `vuln_spec.json`이 `vuln_specs/teamA.json` 같은 형태로 들어와야 합니다.
+- `coordinator/.env`에 운영용 `ADMIN_SECRET`, `TOKEN_TEAM_1`~`TOKEN_TEAM_6`, 필요 시 `OPENROUTER_API_KEY`, `RUNNER_SECRET`이 들어 있어야 합니다. 처음 세팅은 `scripts/setup_admin_env.sh`로 생성할 수 있습니다.
+- 팀별 서비스 이미지가 빌드되어야 하고, `docker-compose.yml`의 `team1-service`~`team6-service`가 실제 이미지 이름으로 연결되어야 합니다.
+- 팀별 `vuln_spec.json`이 `vuln_specs/team1.json` 같은 형태로 들어와야 합니다.
 - 전체 리허설에서는 `python scripts/gitctf.py admin preflight --repeat 3`를 팀 서비스가 모두 떠 있는 상태에서 실행해야 합니다.
 - 공식 라운드 전에는 `RUNNER_SECRET`을 설정하고, 팀 컨테이너에 OpenRouter API key를 직접 주지 않는지 확인해야 합니다.
 - `python scripts/gitctf.py agent ...`가 내부적으로 호출하는 `scripts/agent.py`는 `/tools/agent.py` 최신 공식본을 확인하며, 실제 LLM 호출은 주입된 `OPENAI_BASE_URL` 또는 `OPENROUTER_BASE_URL` wrapper를 사용해야 합니다. `ctx.llm()`은 호환용 선택지입니다.

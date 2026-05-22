@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Generate coordinator/.env and team token handout for a 7-team event.
+# Generate coordinator/.env and team token handout for a 6-team event.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 ENV_FILE="$ROOT_DIR/coordinator/.env"
 TOKEN_FILE="$ROOT_DIR/coordinator/team_tokens.tsv"
-TEAM_SUFFIXES_CSV="${TEAM_SUFFIXES:-A,B,C,D,E,F,G}"
+TEAM_SUFFIXES_CSV="${TEAM_SUFFIXES:-1,2,3,4,5,6}"
 OPENROUTER_VALUE="${OPENROUTER_API_KEY:-replace_before_event}"
 FORCE=0
 
@@ -18,8 +18,8 @@ Creates:
   coordinator/team_tokens.tsv
   data/ repos/ vuln_specs/
 
-Default teams: teamA~teamG.
-Override with TEAM_SUFFIXES=A,B,C,D,E,F,G before running if needed.
+Default teams: team1~team6.
+Override with TEAM_SUFFIXES=1,2,3,4,5,6 before running if needed.
 EOF
 }
 
@@ -70,6 +70,7 @@ tmp_tokens="$(mktemp)"
   echo "TEAM_SUFFIXES=$TEAM_SUFFIXES_CSV"
   echo "ADMIN_SECRET=$(secret)"
   echo "RUNNER_SECRET=$(secret)"
+  echo "CHECKER_TOKEN=$(secret)"
   echo
   echo "# Team service tokens"
   for suffix in "${SUFFIXES[@]}"; do
@@ -84,16 +85,18 @@ tmp_tokens="$(mktemp)"
   done
   echo
   echo "# Team service network defaults"
+  echo "MANAGEMENT_HOST_PORT=42000"
+  echo "PUBLIC_COORDINATOR_URL=http://knights.hspace.io:42000"
   index=0
   for suffix in "${SUFFIXES[@]}"; do
     suffix="$(echo "$suffix" | tr '[:lower:]' '[:upper:]' | xargs)"
     echo "IP_TEAM_${suffix}=10.89.21.$((10 + index))"
     echo "PORT_TEAM_${suffix}=8000"
-    echo "HOST_PORT_TEAM_${suffix}=$((8001 + index))"
+    echo "HOST_PORT_TEAM_${suffix}=$((42001 + index))"
     index=$((index + 1))
   done
   echo
-  echo "COORDINATOR_URL=http://localhost:9000"
+  echo "COORDINATOR_URL=http://localhost:42000"
   echo "HOOK_COORDINATOR_URL=http://127.0.0.1:9000"
   echo "OPENROUTER_API_KEY=$OPENROUTER_VALUE"
   echo "OPENROUTER_BASE_URL=https://openrouter.ai/api/v1"
@@ -117,7 +120,7 @@ tmp_tokens="$(mktemp)"
     team="team${suffix}"
     team_token="$(grep "^TOKEN_TEAM_${suffix}=" "$tmp_env" | cut -d= -f2-)"
     defense_token="$(grep "^DEFENSE_TOKEN_TEAM_${suffix}=" "$tmp_env" | cut -d= -f2-)"
-    printf "%s\t%s\t%s\t10.89.21.%s\t%s\n" "$team" "$team_token" "$defense_token" "$((10 + index))" "$((8001 + index))"
+    printf "%s\t%s\t%s\t10.89.21.%s\t%s\n" "$team" "$team_token" "$defense_token" "$((10 + index))" "$((42001 + index))"
     index=$((index + 1))
   done
 } > "$tmp_tokens"

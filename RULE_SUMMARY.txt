@@ -1,20 +1,20 @@
 HSPACE LiveFire 규칙 초간단 요약
 
 1. 기본 목표
-- 7개 팀이 각각 "쓰기 싫은 사이트" 주제로 웹 서비스를 만들고 취약점 4개를 넣습니다.
-- 본선에서는 attack agent가 다른 팀 서비스를 공격하고, defense agent가 배정된 서비스를 고칩니다.
+- 6개 팀이 각각 사전에 제공된 기획서를 바탕으로 웹 서비스를 구현하고 취약점 4개를 넣습니다.
+- 대회 당일에는 attack agent가 다른 팀 서비스를 공격하고, defense agent가 시스템이 지정한 서비스를 고칩니다.
 - 점수 인정은 공식 agent run token과 coordinator wrapper를 거친 결과만 됩니다.
 
 2. 기억할 명령
 - 스크립트는 scripts/gitctf.py 하나만 기억하면 됩니다.
 
 참가자:
-  python scripts/gitctf.py login teamA --token <TEAM_TOKEN> --coordinator http://<HOST>:9000
+  python scripts/gitctf.py login team1 --token <TEAM_TOKEN> --coordinator http://knights.hspace.io:42000
   python ../scripts/gitctf.py check
   python ../scripts/gitctf.py push
 
 agent:
-  python scripts/gitctf.py agent build teamA
+  python scripts/gitctf.py agent build team1
   python scripts/gitctf.py agent doctor --mode attack
 
 관리자:
@@ -25,7 +25,10 @@ agent:
   python scripts/gitctf.py admin bundle
 
 3. 서비스 제출
-- 순서: 서비스 구현 -> 취약점 4개 심기 -> vuln_spec.json 작성 -> 서비스 실행 -> check PASS -> push
+- 로컬 실행과 check는 제출 전 자가검증용입니다.
+- 공식 제출/대회 당일 실행/채점은 주최 측이 제공하는 대회 서버와 coordinator 기준입니다.
+- 대회 서버 접속 방법과 앱 배포 절차는 USER_DEPLOY_GUIDE.md와 DISCORD_NOTICE.txt를 기준으로 합니다.
+- 순서: 서비스 구현 -> 취약점 4개 심기 -> vuln_spec.json 작성 -> 자가검증 -> 대회 서버 배포 안내 확인 -> check PASS -> push
 - repo 루트에 Dockerfile, vuln_spec.json, 서비스 코드가 있어야 합니다.
 - 취약점은 vuln1~vuln4 총 4개입니다.
 - 로컬 flag, 팀 토큰, API key, 비밀키는 git에 올리면 안 됩니다.
@@ -34,7 +37,12 @@ agent:
 4. 공격/PoC
 - 라운드 중 사람이 poc.py를 직접 제출하지 않습니다.
 - attack agent가 /agent/attack으로 탐색하고 /agent/pocs로 PoC를 제출합니다.
+- LLM 호출은 OpenRouter API 기반이며 coordinator OpenRouter wrapper를 거칩니다.
 - LLM은 주입된 OPENAI_BASE_URL 또는 OPENROUTER_BASE_URL만 사용합니다.
+- [중요] 허용 모델 목록에 있는 모델만 사용할 수 있습니다. 목록 밖 모델은 거절됩니다.
+- agent 요청 제한이 있습니다. agent run 생성은 attack 10/minute, defense 5/minute이고, LLM wrapper는 기본 30/minute, /agent/attack은 20/minute, /agent/pocs는 12/minute입니다.
+- Blind SQLi처럼 많은 요청이 필요한 풀이는 제출할 poc.py 안에서 반복 요청을 수행하게 만듭니다.
+- 429가 나오면 즉시 반복 재시도하지 말고 backoff를 둡니다.
 - 개인 LLM API key나 외부 OpenRouter 직접 호출은 금지입니다.
 - PoC는 TARGET_HOST, TARGET_PORT를 사용하고 마지막 줄에 HSPACE{...}를 출력해야 합니다.
 

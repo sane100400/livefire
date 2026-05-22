@@ -31,7 +31,7 @@ PLAYER
 
 3. 로그인, 터미널 2
    cd <서비스_폴더>
-   python ../scripts/gitctf.py login teamA --token <TEAM_TOKEN> --coordinator http://<HOST>:9000
+   python ../scripts/gitctf.py login team1 --token <TEAM_TOKEN> --coordinator http://knights.hspace.io:42000
 
 4. 서비스 검증
    python ../scripts/gitctf.py check
@@ -42,14 +42,14 @@ PLAYER
 
 AGENT
 1. attack/defense 이미지 빌드
-   python scripts/gitctf.py agent build teamA
+   python scripts/gitctf.py agent build team1
 
 2. 실행 파일 확인
    python scripts/gitctf.py agent doctor --mode attack
    python scripts/gitctf.py agent doctor --mode defense
 
 3. 로컬 디버그가 필요할 때만
-   python scripts/gitctf.py agent run attack --team teamA --target teamC --token <TEAM_TOKEN> --runner-secret <RUNNER_SECRET>
+   python scripts/gitctf.py agent run attack --team team1 --target team3 --token <TEAM_TOKEN> --runner-secret <RUNNER_SECRET>
 
 
 NOTES
@@ -57,7 +57,7 @@ NOTES
 - 참가자는 보통 login, check, push만 사용합니다.
 - 관리자는 admin status, admin preflight, admin round next만 알면 운영할 수 있습니다.
 - 실제 공격 PoC 제출은 라운드 중 attack_agent가 자동으로 처리합니다.
-- attack/defense agent 이미지 빌드는 python scripts/gitctf.py agent build teamA 를 사용합니다.
+- attack/defense agent 이미지 빌드는 python scripts/gitctf.py agent build team1 를 사용합니다.
 - attack/defense agent 로컬 디버그도 python scripts/gitctf.py agent run ... 하나로 실행합니다.
 - agent 코드 구조를 바꿨다면 python scripts/gitctf.py agent doctor --mode attack 으로 runner entrypoint를 확인합니다.
 - gitctf.py agent는 내부적으로 agent.py를 호출하고, agent.py는 coordinator /tools/agent.py 최신 공식본을 확인한 뒤 실행합니다.

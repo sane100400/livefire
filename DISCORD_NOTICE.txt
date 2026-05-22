@@ -1,0 +1,57 @@
+# HSPACE LiveFire 팀 토큰 및 서버 안내
+
+안녕하세요. 운영진이 각 팀별 토큰을 DM으로 전달드릴 예정입니다.
+
+전달드리는 정보는 아래와 같습니다.
+
+- 팀 ID: `team1` ~ `team6`
+- 팀 토큰: `<TEAM_TOKEN>`
+- 방어 토큰: `<DEFENSE_TOKEN>`
+- Coordinator URL: `http://knights.hspace.io:42000`
+
+팀 repo에서 아래처럼 `.env`를 설정해 주세요.
+
+```bash
+cp .env.example .env
+```
+
+```env
+TEAM_ID=team1
+TEAM_TOKEN=<TEAM_TOKEN>
+COORDINATOR_URL=http://knights.hspace.io:42000
+```
+
+처음 한 번 로그인해 주세요.
+
+```bash
+python scripts/gitctf.py login team1 --token "<TEAM_TOKEN>" --coordinator http://knights.hspace.io:42000
+```
+
+서비스 개발 후 아래 명령으로 서버에 배포할 수 있습니다.
+
+```bash
+make push
+```
+
+또는 직접 실행할 경우:
+
+```bash
+python scripts/gitctf.py push --message "submit service"
+```
+
+팀별 서버 주소는 아래와 같습니다.
+
+- `team1`: `http://knights.hspace.io:42001`
+- `team2`: `http://knights.hspace.io:42002`
+- `team3`: `http://knights.hspace.io:42003`
+- `team4`: `http://knights.hspace.io:42004`
+- `team5`: `http://knights.hspace.io:42005`
+- `team6`: `http://knights.hspace.io:42006`
+
+배포 후에는 자기 팀 주소의 `/health`를 확인해 주세요.
+
+```bash
+curl -fsS http://knights.hspace.io:42001/health
+```
+
+토큰은 공개 채널이나 GitHub에 올리지 말고 팀 내부에서만 사용해 주세요.

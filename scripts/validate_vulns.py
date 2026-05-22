@@ -37,7 +37,6 @@ from typing import Any
 import httpx
 
 CHECKER_TOKEN_DEFAULT = "validate-test-token"
-REQUIRED_DIFFICULTIES = {"low", "mid", "high"}
 FLAG_PATTERN = re.compile(r"HSPACE\{[a-f0-9]{32}\}")
 
 
@@ -542,13 +541,6 @@ def _validate_vuln_schema(vulns: list[dict]) -> list[str]:
     ids = [v.get("id") for v in vulns]
     if ids != ["vuln1", "vuln2", "vuln3", "vuln4"]:
         errors.append("취약점 id는 vuln1~vuln4 순서여야 함")
-    difficulties = [v.get("difficulty") for v in vulns]
-    for vuln in vulns:
-        difficulty = vuln.get("difficulty")
-        if difficulty not in REQUIRED_DIFFICULTIES:
-            errors.append(f"{vuln.get('id', '<unknown>')}: difficulty는 low/mid/high 중 하나여야 함")
-    if not REQUIRED_DIFFICULTIES.issubset(set(difficulties)):
-        errors.append("difficulty 분포에 low, mid, high가 모두 포함되어야 함")
     return errors
 
 

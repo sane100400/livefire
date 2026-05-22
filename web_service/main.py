@@ -12,13 +12,13 @@ checker.inject, checker.retrieve에 실제 요청 형식을 선언하면 된다.
   GET  /admin/check     — 주입된 flag 존재 확인 예시
 
 취약점 4개를 서비스의 주요 공격면에 심어서 제출한다.
-아래 예시는 "쓰기 싫은 사이트" 주제에 맞춘 귀찮은 업무 도우미 웹 서비스 뼈대다.
+아래 예시는 사전에 제공된 기획서를 바탕으로 구현한 귀찮은 업무 도우미 웹 서비스 뼈대다.
 팀이 이 주제 안에서 원하는 서비스 컨셉으로 바꿔서 사용.
 """
 import os
 import re
 from fastapi import FastAPI, Header, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
 app = FastAPI()
@@ -152,6 +152,23 @@ def _get_search_result(query: str) -> str:
 
 
 # ── 엔드포인트 ────────────────────────────────────────────────────────
+
+@app.get("/", response_class=HTMLResponse)
+def index():
+    return """<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HSPACE LiveFire Service</title>
+</head>
+<body>
+  <h1>개발을 시작하세요</h1>
+  <p>여기는 여러분 팀의 웹 서비스 자리입니다.</p>
+  <p>서비스를 구현하고, vuln_spec.json을 맞춘 뒤 gitctf.py push로 배포하세요.</p>
+</body>
+</html>"""
+
 
 @app.get("/health")
 def health():

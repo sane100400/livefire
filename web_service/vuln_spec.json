@@ -1,6 +1,6 @@
 {
-    "team_id": "teamA",
-    "service_description": "쓰기 싫은 업무 도우미 웹 서비스 예시 (핑계 검색 + 메모리 + 할 일 관리 툴)",
+    "team_id": "team1",
+    "service_description": "기획서 기반 업무 도우미 웹 서비스 예시 (핑계 검색 + 메모리 + 할 일 관리 툴)",
     "service": {
         "health": {
             "endpoint": "/health",

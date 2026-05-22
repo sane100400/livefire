@@ -18,7 +18,8 @@ ROOT = Path(__file__).resolve().parents[1]
 COORDINATOR = ROOT / "coordinator"
 SCRIPTS = ROOT / "scripts"
 os.environ.setdefault("ADMIN_SECRET", "test-admin")
-for suffix in "ABCDEFG":
+os.environ["TEAM_SUFFIXES"] = "1,2,3,4,5,6"
+for suffix in "1234567":
     os.environ.setdefault(f"TOKEN_TEAM_{suffix}", f"tok{suffix}")
     os.environ.setdefault(f"DEFENSE_TOKEN_TEAM_{suffix}", f"dtok{suffix}")
 sys.path.insert(0, str(COORDINATOR))
@@ -29,11 +30,12 @@ import checker  # noqa: E402
 import poc_runner  # noqa: E402
 import scorer  # noqa: E402
 from validate_vulns import validate_poc_single, validate_single  # noqa: E402
+from preflight_check import _missing_team_specs  # noqa: E402
 from rotation import get_attack_targets, get_defender, get_defense_target  # noqa: E402
 from config import TEAM_ORDER, TEAMS, TEAM_TOKENS, ATTACK_AGENT_IMAGES, DEFENSE_AGENT_IMAGES  # noqa: E402
 
 
-TEAM_IDS = ["teamA", "teamB", "teamC", "teamD", "teamE", "teamF", "teamG"]
+TEAM_IDS = ["team1", "team2", "team3", "team4", "team5", "team6"]
 
 
 def reset_db(path: Path) -> None:
@@ -46,30 +48,35 @@ def reset_db(path: Path) -> None:
 
 
 class CoreFlowTests(unittest.TestCase):
-    def test_default_event_has_seven_teams(self):
+    def test_default_event_has_six_teams(self):
         self.assertEqual(TEAM_ORDER, TEAM_IDS)
-        self.assertIn("teamG", TEAMS)
-        self.assertIn("teamG", TEAM_TOKENS)
-        self.assertEqual(ATTACK_AGENT_IMAGES["teamG"], "and-attack-teamg:latest")
-        self.assertEqual(DEFENSE_AGENT_IMAGES["teamG"], "and-defense-teamg:latest")
+        self.assertIn("team6", TEAMS)
+        self.assertIn("team6", TEAM_TOKENS)
+        self.assertEqual(ATTACK_AGENT_IMAGES["team6"], "and-attack-team6:latest")
+        self.assertEqual(DEFENSE_AGENT_IMAGES["team6"], "and-defense-team6:latest")
+
+    def test_preflight_requires_team_specs_for_all_teams(self):
+        teams = {team_id: {"ip": f"10.0.0.{idx}", "port": 8000} for idx, team_id in enumerate(TEAM_IDS, start=1)}
+        specs = {team_id: {"team_id": team_id} for team_id in TEAM_IDS[:-1]}
+        self.assertEqual(_missing_team_specs(teams, specs), ["team6"])
 
     def test_rotation_rules(self):
-        self.assertEqual(get_defender("teamA"), "teamB")
-        self.assertEqual(get_defense_target("teamB"), "teamA")
-        self.assertNotIn("teamA", get_attack_targets("teamA"))
-        self.assertNotIn("teamG", get_attack_targets("teamA"))
-        self.assertEqual(set(get_attack_targets("teamA")), {"teamB", "teamC", "teamD", "teamE", "teamF"})
-        self.assertEqual(get_defender("teamG"), "teamA")
-        self.assertEqual(get_defense_target("teamA"), "teamG")
+        self.assertEqual(get_defender("team1"), "team2")
+        self.assertEqual(get_defense_target("team2"), "team1")
+        self.assertNotIn("team1", get_attack_targets("team1"))
+        self.assertNotIn("team6", get_attack_targets("team1"))
+        self.assertEqual(set(get_attack_targets("team1")), {"team2", "team3", "team4", "team5"})
+        self.assertEqual(get_defender("team6"), "team1")
+        self.assertEqual(get_defense_target("team1"), "team6")
 
     def test_submitted_poc_scores_once_per_round_without_manual_accept(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             reset_db(root / "game.db")
-            db.set_service_status("teamB", "OK")
+            db.set_service_status("team2", "OK")
             flag = "HSPACE{0123456789abcdef0123456789abcdef}"
-            db.upsert_flag(1, "teamB", "vuln1", flag)
-            run = db.create_agent_run("run-1", "teamA", "attack", "teamB", 1)
+            db.upsert_flag(1, "team2", "vuln1", flag)
+            run = db.create_agent_run("run-1", "team1", "attack", "team2", 1)
             llm_id = db.append_llm_call(
                 agent_run_id=run["id"],
                 model="openai/gpt-4o-mini",
@@ -79,15 +86,15 @@ class CoreFlowTests(unittest.TestCase):
                 purpose="poc",
                 status="completed",
             )
-            poc_path = root / "poc_teamB_vuln1.py"
+            poc_path = root / "poc_team2_vuln1.py"
             poc_path.write_text(f"print('{flag}')\n", encoding="utf-8")
             poc = db.create_poc_submission(
                 poc_id="poc-1",
                 agent_run_id=run["id"],
                 llm_call_id=llm_id,
-                attacker_team="teamA",
-                target_team="teamB",
-                defender_team="teamC",
+                attacker_team="team1",
+                target_team="team2",
+                defender_team="team3",
                 flag_id="vuln1",
                 submitted_round=1,
                 file_name=poc_path.name,
@@ -96,7 +103,7 @@ class CoreFlowTests(unittest.TestCase):
             )
             self.assertEqual(poc["status"], "submitted")
 
-            teams = {"teamB": {"ip": "127.0.0.1", "port": 8000, "name": "Team B"}}
+            teams = {"team2": {"ip": "127.0.0.1", "port": 8000, "name": "Team 2"}}
             first = poc_runner.run_pocs_for_round(
                 round_num=1,
                 teams=teams,
@@ -122,18 +129,18 @@ class CoreFlowTests(unittest.TestCase):
             self.assertEqual(first[0]["scored"], 1)
             self.assertTrue(second[0]["already_ran"])
             scores = db.get_all_scores()
-            self.assertEqual(scores["teamA"]["score"], 1010)
-            self.assertEqual(scores["teamC"]["score"], 990)
-            self.assertEqual(db.count_successful_pocs_by_attacker(), {"teamA": 1})
+            self.assertEqual(scores["team1"]["score"], 1010)
+            self.assertEqual(scores["team3"]["score"], 990)
+            self.assertEqual(db.count_successful_pocs_by_attacker(), {"team1": 1})
 
     def test_poc_runner_requires_flag_on_final_stdout_line(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             reset_db(root / "game.db")
-            db.set_service_status("teamB", "OK")
+            db.set_service_status("team2", "OK")
             flag = "HSPACE{fedcba9876543210fedcba9876543210}"
-            db.upsert_flag(1, "teamB", "vuln1", flag)
-            run = db.create_agent_run("run-final-line", "teamA", "attack", "teamB", 1)
+            db.upsert_flag(1, "team2", "vuln1", flag)
+            run = db.create_agent_run("run-final-line", "team1", "attack", "team2", 1)
             llm_id = db.append_llm_call(
                 agent_run_id=run["id"],
                 model="openai/gpt-4o-mini",
@@ -149,9 +156,9 @@ class CoreFlowTests(unittest.TestCase):
                 poc_id="poc-final-line",
                 agent_run_id=run["id"],
                 llm_call_id=llm_id,
-                attacker_team="teamA",
-                target_team="teamB",
-                defender_team="teamC",
+                attacker_team="team1",
+                target_team="team2",
+                defender_team="team3",
                 flag_id="vuln1",
                 submitted_round=1,
                 file_name=poc_path.name,
@@ -161,7 +168,7 @@ class CoreFlowTests(unittest.TestCase):
 
             result = poc_runner.run_pocs_for_round(
                 round_num=1,
-                teams={"teamB": {"ip": "127.0.0.1", "port": 8000, "name": "Team B"}},
+                teams={"team2": {"ip": "127.0.0.1", "port": 8000, "name": "Team 2"}},
                 data_dir=str(root / "data"),
                 timeout_sec=5,
                 output_max_bytes=4096,
@@ -178,9 +185,9 @@ class CoreFlowTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             reset_db(root / "game.db")
-            db.set_service_status("teamA", "OK")
-            db.set_service_status("teamB", "OK")
-            run = db.create_agent_run("run-1", "teamA", "attack", "teamB", 1)
+            db.set_service_status("team1", "OK")
+            db.set_service_status("team2", "OK")
+            run = db.create_agent_run("run-1", "team1", "attack", "team2", 1)
             llm_id = db.append_llm_call(
                 agent_run_id=run["id"],
                 model="openai/gpt-4o-mini",
@@ -193,9 +200,9 @@ class CoreFlowTests(unittest.TestCase):
                 poc_id="poc-1",
                 agent_run_id=run["id"],
                 llm_call_id=llm_id,
-                attacker_team="teamA",
-                target_team="teamB",
-                defender_team="teamC",
+                attacker_team="team1",
+                target_team="team2",
+                defender_team="team3",
                 flag_id="vuln1",
                 submitted_round=1,
                 file_name="poc.py",
@@ -205,9 +212,9 @@ class CoreFlowTests(unittest.TestCase):
             db.insert_poc_result(
                 round_num=1,
                 poc_id="poc-1",
-                attacker_team="teamA",
-                target_team="teamB",
-                defender_team="teamC",
+                attacker_team="team1",
+                target_team="team2",
+                defender_team="team3",
                 flag_id="vuln1",
                 status="success",
                 flags=["HSPACE{0123456789abcdef0123456789abcdef}"],
@@ -218,15 +225,15 @@ class CoreFlowTests(unittest.TestCase):
             result = scorer.compute_round_scores(
                 TEAM_IDS,
                 1,
-                availability={"teamA": True, "teamB": True},
+                availability={"team1": True, "team2": True},
                 attack_reward=10,
                 attack_penalty=10,
                 availability_bonus=10,
             )
-            self.assertEqual(result["availability_score_changes"]["teamA"], 10)
-            self.assertEqual(result["poc_score_changes"]["teamA"], 10)
-            self.assertEqual(result["poc_score_changes"]["teamC"], -10)
-            self.assertEqual(result["score_changes"]["teamA"], 20)
+            self.assertEqual(result["availability_score_changes"]["team1"], 10)
+            self.assertEqual(result["poc_score_changes"]["team1"], 10)
+            self.assertEqual(result["poc_score_changes"]["team3"], -10)
+            self.assertEqual(result["score_changes"]["team1"], 20)
 
     def test_end_round_checker_refresh_blocks_stale_ok_bonus(self):
         class Handler(BaseHTTPRequestHandler):
@@ -260,16 +267,16 @@ class CoreFlowTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             reset_db(root / "game.db")
-            db.set_service_status("teamA", "OK")
+            db.set_service_status("team1", "OK")
             flag = "HSPACE{0123456789abcdef0123456789abcdef}"
-            db.upsert_flag(1, "teamA", "vuln1", flag)
+            db.upsert_flag(1, "team1", "vuln1", flag)
 
             server = HTTPServer(("127.0.0.1", 0), Handler)
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             try:
                 spec = {
-                    "team_id": "teamA",
+                    "team_id": "team1",
                     "service": {"health": {"endpoint": "/health", "method": "GET", "expect_status": 200}},
                     "vulnerabilities": [{
                         "id": "vuln1",
@@ -281,9 +288,9 @@ class CoreFlowTests(unittest.TestCase):
                     }],
                 }
                 results = asyncio.run(checker.run_all_checkers(
-                    {"teamA": {"ip": "127.0.0.1", "port": server.server_port}},
-                    {"teamA": spec},
-                    {"teamA": {"vuln1": flag}},
+                    {"team1": {"ip": "127.0.0.1", "port": server.server_port}},
+                    {"team1": spec},
+                    {"team1": {"vuln1": flag}},
                     "checker-token",
                 ))
             finally:
@@ -291,17 +298,17 @@ class CoreFlowTests(unittest.TestCase):
                 server.server_close()
                 thread.join(timeout=2)
 
-            self.assertTrue(results["teamA"].health_ok)
-            self.assertEqual(db.get_service_statuses()["teamA"], "FAULTY")
+            self.assertTrue(results["team1"].health_ok)
+            self.assertEqual(db.get_service_statuses()["team1"], "FAULTY")
             score = scorer.compute_round_scores(
-                ["teamA"],
+                ["team1"],
                 1,
-                availability={"teamA": True},
+                availability={"team1": True},
                 attack_reward=10,
                 attack_penalty=10,
                 availability_bonus=10,
             )
-            self.assertEqual(score["availability_score_changes"]["teamA"], 0)
+            self.assertEqual(score["availability_score_changes"]["team1"], 0)
 
 
 class SpecDrivenServiceTests(unittest.TestCase):
@@ -531,10 +538,10 @@ class AgentSDKTests(unittest.TestCase):
 
         ctx = AgentContext(
             coordinator_url="http://coordinator",
-            team_id="teamA",
+            team_id="team1",
             team_token="tokenA",
             mode="attack",
-            target_team="teamB",
+            target_team="team2",
             round_num=1,
             agent_run_id="run-1",
             agent_run_token="run-token",
@@ -549,8 +556,8 @@ class AgentSDKTests(unittest.TestCase):
         _, kwargs = post.call_args
         self.assertEqual(kwargs["data"]["agent_run_id"], "run-1")
         self.assertEqual(kwargs["data"]["llm_call_id"], "123")
-        self.assertEqual(kwargs["data"]["attacker_team"], "teamA")
-        self.assertEqual(kwargs["data"]["target_team"], "teamB")
+        self.assertEqual(kwargs["data"]["attacker_team"], "team1")
+        self.assertEqual(kwargs["data"]["target_team"], "team2")
         self.assertEqual(kwargs["data"]["flag_id"], "vuln1")
         file_name, file_bytes, media_type = kwargs["files"]["file"]
         self.assertEqual(file_name, "poc.py")
@@ -603,7 +610,13 @@ class AgentOrchestrationPolicyTests(unittest.TestCase):
             source = (ROOT / relative).read_text(encoding="utf-8")
             self.assertIn("ctx.llm(", source, relative)
             self.assertNotIn("OPENROUTER_API_KEY", source, relative)
-            self.assertNotIn("openrouter.ai", source.lower(), relative)
+            for forbidden in [
+                "openrouter.ai",
+                "api.openai.com",
+                "api.anthropic.com",
+                "generativelanguage.googleapis.com",
+            ]:
+                self.assertNotIn(forbidden, source.lower(), relative)
             self.assertNotIn("/chat/completions", source, relative)
 
     def test_unified_agent_helper_has_trusted_bootstrap_marker(self):
@@ -632,14 +645,14 @@ class AgentOrchestrationPolicyTests(unittest.TestCase):
             text=True,
         )
         self.assertEqual(help_result.returncode, 0, help_result.stderr + help_result.stdout)
-        self.assertIn("gitctf.py agent build teamA", help_result.stdout)
+        self.assertIn("gitctf.py agent build team1", help_result.stdout)
 
-    def test_admin_env_setup_script_targets_seven_team_event(self):
+    def test_admin_env_setup_script_targets_six_team_event(self):
         script = ROOT / "scripts" / "setup_admin_env.sh"
         result = subprocess.run(["bash", "-n", str(script)], cwd=ROOT, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         source = script.read_text(encoding="utf-8")
-        self.assertIn("A,B,C,D,E,F,G", source)
+        self.assertIn("1,2,3,4,5,6", source)
         self.assertIn("team_tokens.tsv", source)
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
@@ -656,15 +669,60 @@ class AgentOrchestrationPolicyTests(unittest.TestCase):
             self.assertEqual(run.returncode, 0, run.stderr + run.stdout)
             env_text = (tmp / "coordinator" / ".env").read_text(encoding="utf-8")
             tokens_text = (tmp / "coordinator" / "team_tokens.tsv").read_text(encoding="utf-8")
-            self.assertIn("TOKEN_TEAM_G=", env_text)
-            self.assertIn("HOST_PORT_TEAM_G=8007", env_text)
-            self.assertIn("teamG\t", tokens_text)
+            self.assertIn("CHECKER_TOKEN=", env_text)
+            self.assertIn("TOKEN_TEAM_6=", env_text)
+            self.assertIn("HOST_PORT_TEAM_6=42006", env_text)
+            self.assertIn("team6\t", tokens_text)
+            self.assertNotIn("CHECKER_TOKEN", tokens_text)
+            self.assertNotIn("TOKEN_TEAM_G=", env_text)
+            self.assertNotIn("teamG\t", tokens_text)
 
     def test_user_docs_point_to_single_cli_for_agent_work(self):
         for relative in ["README.md", "SCRIPT_USAGE.txt", "AGENT_USAGE.txt"]:
             source = (ROOT / relative).read_text(encoding="utf-8")
             self.assertIn("gitctf.py agent", source, relative)
             self.assertNotIn("python scripts/agent.py", source, relative)
+        agent_usage = (ROOT / "AGENT_USAGE.txt").read_text(encoding="utf-8")
+        self.assertIn("오케스트레이션 방식은 자유입니다", agent_usage)
+        self.assertIn("OPENAI_BASE_URL", agent_usage)
+        self.assertIn("OPENROUTER_BASE_URL", agent_usage)
+        self.assertIn("api.openai.com", agent_usage)
+        self.assertIn("/agent/attack", agent_usage)
+        self.assertIn("/agent/pocs", agent_usage)
+        self.assertIn("허용 모델", agent_usage)
+
+    def test_user_deploy_bundle_is_participant_facing(self):
+        source = (ROOT / "scripts" / "build_user_deploy.py").read_text(encoding="utf-8")
+        self.assertIn("USER_DEPLOY_GUIDE.md", source)
+        self.assertIn("DISCORD_NOTICE.txt", source)
+        self.assertIn("hspace-livefire-user-deploy.tar.gz", source)
+        self.assertNotIn("deploy-guide.pdf", source)
+        self.assertNotIn("USER_DEPLOY_GUIDE.pdf", source)
+        self.assertNotIn('"scripts/setup_admin_env.sh"', source)
+        notice = (ROOT / "DISCORD_NOTICE.txt").read_text(encoding="utf-8")
+        self.assertIn("팀 토큰 및 서버 안내", notice)
+        self.assertIn("<TEAM_TOKEN>", notice)
+        self.assertIn("<DEFENSE_TOKEN>", notice)
+        self.assertIn("gitctf.py login", notice)
+        self.assertIn("GitHub에 올리지 말고", notice)
+        self.assertIn("gitctf.py push", notice)
+        self.assertIn("make push", notice)
+        self.assertIn("http://knights.hspace.io:42001", notice)
+        self.assertIn("http://knights.hspace.io:42006", notice)
+        self.assertNotIn("Agent 오케스트레이션", notice)
+        self.assertNotIn("허용 모델 prefix", notice)
+
+    def test_public_runtime_is_cli_only(self):
+        compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+        gateway = (ROOT / "gateway" / "nginx.conf").read_text(encoding="utf-8")
+        self.assertNotIn("scoreboard:", compose)
+        self.assertNotIn("./scoreboard", compose)
+        self.assertFalse((ROOT / "scoreboard" / "index.html").exists())
+        self.assertIn("types { }", gateway)
+        self.assertIn("default_type text/plain", gateway)
+        self.assertIn('return 404 "not found\\n"', gateway)
+        self.assertNotIn("autoindex on", gateway)
+        self.assertNotIn("deploy-guide.pdf", gateway)
 
     def test_agent_dockerfiles_use_compatibility_runner(self):
         for relative in ["attack_agent/Dockerfile", "defense_agent/Dockerfile"]:
@@ -675,15 +733,37 @@ class AgentOrchestrationPolicyTests(unittest.TestCase):
 
     def test_official_agent_runner_does_not_expose_runner_secret(self):
         source = (ROOT / "coordinator" / "agent_runner.py").read_text(encoding="utf-8")
+        compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+        self.assertIn("COORDINATOR_URL=http://10.89.20.2:9000", compose)
+        self.assertIn('ATTACK_DOCKER_NETWORK=hackathon_scoring-net', compose)
+        self.assertIn("--network", source)
+        self.assertIn("ATTACK_DOCKER_NETWORK", source)
         self.assertIn("AGENT_RUN_TOKEN", source)
         self.assertIn("OPENAI_BASE_URL", source)
+        self.assertIn("OPENROUTER_BASE_URL", source)
+        self.assertIn("OPENROUTER_API_KEY={run_token}", source)
         self.assertIn("HSPACE_AGENT_BASE_URL", source)
+        self.assertIn("TARGET_REPO_URL", source)
         self.assertNotIn("RUNNER_SECRET=", source)
 
     def test_git_hook_locks_push_after_preflight(self):
         source = (ROOT / "coordinator" / "git_handler.py").read_text(encoding="utf-8")
         self.assertIn("PREFLIGHT_DONE", source)
         self.assertIn("사전검증 이후에는 추가 push 불가", source)
+
+    def test_git_deploy_uses_gateway_owned_team_ports(self):
+        compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+        gateway = (ROOT / "gateway" / "nginx.conf").read_text(encoding="utf-8")
+        git_handler_source = (ROOT / "coordinator" / "git_handler.py").read_text(encoding="utf-8")
+        self.assertIn('"42001:42001"', compose)
+        self.assertIn('"42006:42006"', compose)
+        self.assertIn("profiles:", compose)
+        self.assertIn("- mock", compose)
+        self.assertIn("proxy_pass http://10.89.21.10:8000;", gateway)
+        self.assertIn("--network hackathon_target-net", git_handler_source)
+        self.assertIn('--ip "{team_ip}"', git_handler_source)
+        self.assertIn('"hackathon-{docker_team}-service-1"', git_handler_source)
+        self.assertNotIn('-p "{host_port}:8000"', git_handler_source)
 
     def test_protected_script_commands_cannot_skip_self_update(self):
         env = os.environ.copy()
@@ -707,9 +787,9 @@ class AgentOrchestrationPolicyTests(unittest.TestCase):
                 "run",
                 "attack",
                 "--team",
-                "teamA",
+                "team1",
                 "--target",
-                "teamB",
+                "team2",
                 "--token",
                 "token",
             ],
@@ -723,6 +803,130 @@ class AgentOrchestrationPolicyTests(unittest.TestCase):
 
 
 class OpenRouterGatewayTests(unittest.TestCase):
+    def test_agent_run_rate_limit_returns_429(self):
+        script = textwrap.dedent(
+            f"""
+            import os
+            import tempfile
+            from pathlib import Path
+
+            root = Path({str(ROOT)!r})
+            workdir = Path(tempfile.mkdtemp())
+            os.environ.update({{
+                "ADMIN_SECRET": "admin",
+                "TOKEN_TEAM_1": "tokA",
+                "TOKEN_TEAM_2": "tokB",
+                "TOKEN_TEAM_3": "tokC",
+                "TOKEN_TEAM_4": "tokD",
+                "TOKEN_TEAM_5": "tokE",
+                "TOKEN_TEAM_6": "tokF",
+                "DEFENSE_TOKEN_TEAM_1": "dtokA",
+                "DEFENSE_TOKEN_TEAM_2": "dtokB",
+                "DEFENSE_TOKEN_TEAM_3": "dtokC",
+                "DEFENSE_TOKEN_TEAM_4": "dtokD",
+                "DEFENSE_TOKEN_TEAM_5": "dtokE",
+                "DEFENSE_TOKEN_TEAM_6": "dtokF",
+                "RUNNER_SECRET": "runner-secret",
+                "DB_PATH": str(workdir / "game.db"),
+                "DATA_DIR": str(workdir / "data"),
+                "VULN_SPEC_DIR": str(workdir / "vuln_specs"),
+                "REPOS_DIR": str(workdir / "repos"),
+                "RATE_LIMIT_AGENT_RUNS": "2/minute",
+            }})
+            (workdir / "vuln_specs").mkdir()
+            (workdir / "repos").mkdir()
+
+            import sys
+            sys.path.insert(0, str(root / "coordinator"))
+            from fastapi.testclient import TestClient
+            import app
+
+            with TestClient(app.app) as client:
+                headers = {{
+                    "X-Team-Token": "tokA",
+                    "X-Runner-Secret": "runner-secret",
+                    "X-Agent-SDK": "hspace-agent-sdk/1",
+                }}
+                payload = {{"team_id": "team1", "mode": "attack", "target_team": "team2", "round_num": 0}}
+                first = client.post("/agent-runs", headers=headers, json=payload)
+                second = client.post("/agent-runs", headers=headers, json=payload)
+                third = client.post("/agent-runs", headers=headers, json=payload)
+                assert first.status_code == 200, first.text
+                assert second.status_code == 200, second.text
+                assert third.status_code == 429, third.text
+            """
+        )
+        result = subprocess.run([sys.executable, "-c", script], cwd=ROOT, capture_output=True, text=True, timeout=30)
+        if result.returncode != 0:
+            self.fail(result.stdout + result.stderr)
+
+    def test_agent_run_rate_limit_is_split_by_mode(self):
+        script = textwrap.dedent(
+            f"""
+            import os
+            import tempfile
+            from pathlib import Path
+
+            root = Path({str(ROOT)!r})
+            workdir = Path(tempfile.mkdtemp())
+            os.environ.pop("RATE_LIMIT_AGENT_RUNS", None)
+            os.environ.update({{
+                "ADMIN_SECRET": "admin",
+                "TOKEN_TEAM_1": "tokA",
+                "TOKEN_TEAM_2": "tokB",
+                "TOKEN_TEAM_3": "tokC",
+                "TOKEN_TEAM_4": "tokD",
+                "TOKEN_TEAM_5": "tokE",
+                "TOKEN_TEAM_6": "tokF",
+                "DEFENSE_TOKEN_TEAM_1": "dtokA",
+                "DEFENSE_TOKEN_TEAM_2": "dtokB",
+                "DEFENSE_TOKEN_TEAM_3": "dtokC",
+                "DEFENSE_TOKEN_TEAM_4": "dtokD",
+                "DEFENSE_TOKEN_TEAM_5": "dtokE",
+                "DEFENSE_TOKEN_TEAM_6": "dtokF",
+                "RUNNER_SECRET": "runner-secret",
+                "DB_PATH": str(workdir / "game.db"),
+                "DATA_DIR": str(workdir / "data"),
+                "VULN_SPEC_DIR": str(workdir / "vuln_specs"),
+                "REPOS_DIR": str(workdir / "repos"),
+                "RATE_LIMIT_ATTACK_AGENT_RUNS": "2/minute",
+                "RATE_LIMIT_DEFENSE_AGENT_RUNS": "1/minute",
+            }})
+            (workdir / "vuln_specs").mkdir()
+            (workdir / "repos").mkdir()
+
+            import sys
+            sys.path.insert(0, str(root / "coordinator"))
+            from fastapi.testclient import TestClient
+            import app
+
+            with TestClient(app.app) as client:
+                headers = {{
+                    "X-Team-Token": "tokA",
+                    "X-Runner-Secret": "runner-secret",
+                    "X-Agent-SDK": "hspace-agent-sdk/1",
+                }}
+                attack_payload = {{"team_id": "team1", "mode": "attack", "target_team": "team2", "round_num": 0}}
+                assert client.post("/agent-runs", headers=headers, json=attack_payload).status_code == 200
+                assert client.post("/agent-runs", headers=headers, json=attack_payload).status_code == 200
+                attack_blocked = client.post("/agent-runs", headers=headers, json=attack_payload)
+                assert attack_blocked.status_code == 429, attack_blocked.text
+
+                defense_headers = {{
+                    "X-Team-Token": "dtokB",
+                    "X-Runner-Secret": "runner-secret",
+                    "X-Agent-SDK": "hspace-agent-sdk/1",
+                }}
+                defense_payload = {{"team_id": "team2", "mode": "defense", "target_team": "team1", "round_num": 0}}
+                assert client.post("/agent-runs", headers=defense_headers, json=defense_payload).status_code == 200
+                defense_blocked = client.post("/agent-runs", headers=defense_headers, json=defense_payload)
+                assert defense_blocked.status_code == 429, defense_blocked.text
+            """
+        )
+        result = subprocess.run([sys.executable, "-c", script], cwd=ROOT, capture_output=True, text=True, timeout=30)
+        if result.returncode != 0:
+            self.fail(result.stdout + result.stderr)
+
     def test_llm_gateway_uses_openrouter_compatible_api(self):
         script = textwrap.dedent(
             f"""
@@ -739,20 +943,18 @@ class OpenRouterGatewayTests(unittest.TestCase):
             root = Path({str(ROOT)!r})
             os.environ.update({{
                 "ADMIN_SECRET": "admin",
-                "TOKEN_TEAM_A": "tokA",
-                "TOKEN_TEAM_B": "tokB",
-                "TOKEN_TEAM_C": "tokC",
-                "TOKEN_TEAM_D": "tokD",
-                "TOKEN_TEAM_E": "tokE",
-                "TOKEN_TEAM_F": "tokF",
-                "TOKEN_TEAM_G": "tokG",
-                "DEFENSE_TOKEN_TEAM_A": "dtokA",
-                "DEFENSE_TOKEN_TEAM_B": "dtokB",
-                "DEFENSE_TOKEN_TEAM_C": "dtokC",
-                "DEFENSE_TOKEN_TEAM_D": "dtokD",
-                "DEFENSE_TOKEN_TEAM_E": "dtokE",
-                "DEFENSE_TOKEN_TEAM_F": "dtokF",
-                "DEFENSE_TOKEN_TEAM_G": "dtokG",
+                "TOKEN_TEAM_1": "tokA",
+                "TOKEN_TEAM_2": "tokB",
+                "TOKEN_TEAM_3": "tokC",
+                "TOKEN_TEAM_4": "tokD",
+                "TOKEN_TEAM_5": "tokE",
+                "TOKEN_TEAM_6": "tokF",
+                "DEFENSE_TOKEN_TEAM_1": "dtokA",
+                "DEFENSE_TOKEN_TEAM_2": "dtokB",
+                "DEFENSE_TOKEN_TEAM_3": "dtokC",
+                "DEFENSE_TOKEN_TEAM_4": "dtokD",
+                "DEFENSE_TOKEN_TEAM_5": "dtokE",
+                "DEFENSE_TOKEN_TEAM_6": "dtokF",
                 "RUNNER_SECRET": "runner-secret",
                 "OPENROUTER_API_KEY": "test-openrouter-key",
                 "DB_PATH": str(Path(tempfile.mkdtemp()) / "game.db"),
@@ -819,13 +1021,13 @@ class OpenRouterGatewayTests(unittest.TestCase):
                 bad_run = client.post(
                     "/agent-runs",
                     headers={{"X-Team-Token": "tokA", "X-Agent-SDK": "hspace-agent-sdk/1"}},
-                    json={{"team_id": "teamA", "mode": "attack", "target_team": "teamC", "round_num": 0}},
+                    json={{"team_id": "team1", "mode": "attack", "target_team": "team3", "round_num": 0}},
                 )
                 assert bad_run.status_code == 403, bad_run.text
                 student_run = client.post(
                     "/student/agent-runs",
                     headers={{"X-Team-Token": "tokA"}},
-                    json={{"team_id": "teamA", "mode": "attack", "target_team": "teamC", "round_num": 0}},
+                    json={{"team_id": "team1", "mode": "attack", "target_team": "team3", "round_num": 0}},
                 )
                 assert student_run.status_code == 404, student_run.text
                 run = client.post(
@@ -835,7 +1037,7 @@ class OpenRouterGatewayTests(unittest.TestCase):
                         "X-Runner-Secret": "runner-secret",
                         "X-Agent-SDK": "hspace-agent-sdk/1",
                     }},
-                    json={{"team_id": "teamA", "mode": "attack", "target_team": "teamC", "round_num": 0}},
+                    json={{"team_id": "team1", "mode": "attack", "target_team": "team3", "round_num": 0}},
                 )
                 assert run.status_code == 200, run.text
                 run_data = run.json()
@@ -911,20 +1113,18 @@ class OpenRouterGatewayTests(unittest.TestCase):
             flag = "HSPACE" + chr(123) + "11111111111111111111111111111111" + chr(125)
             os.environ.update({{
                 "ADMIN_SECRET": "admin",
-                "TOKEN_TEAM_A": "tokA",
-                "TOKEN_TEAM_B": "tokB",
-                "TOKEN_TEAM_C": "tokC",
-                "TOKEN_TEAM_D": "tokD",
-                "TOKEN_TEAM_E": "tokE",
-                "TOKEN_TEAM_F": "tokF",
-                "TOKEN_TEAM_G": "tokG",
-                "DEFENSE_TOKEN_TEAM_A": "dtokA",
-                "DEFENSE_TOKEN_TEAM_B": "dtokB",
-                "DEFENSE_TOKEN_TEAM_C": "dtokC",
-                "DEFENSE_TOKEN_TEAM_D": "dtokD",
-                "DEFENSE_TOKEN_TEAM_E": "dtokE",
-                "DEFENSE_TOKEN_TEAM_F": "dtokF",
-                "DEFENSE_TOKEN_TEAM_G": "dtokG",
+                "TOKEN_TEAM_1": "tokA",
+                "TOKEN_TEAM_2": "tokB",
+                "TOKEN_TEAM_3": "tokC",
+                "TOKEN_TEAM_4": "tokD",
+                "TOKEN_TEAM_5": "tokE",
+                "TOKEN_TEAM_6": "tokF",
+                "DEFENSE_TOKEN_TEAM_1": "dtokA",
+                "DEFENSE_TOKEN_TEAM_2": "dtokB",
+                "DEFENSE_TOKEN_TEAM_3": "dtokC",
+                "DEFENSE_TOKEN_TEAM_4": "dtokD",
+                "DEFENSE_TOKEN_TEAM_5": "dtokE",
+                "DEFENSE_TOKEN_TEAM_6": "dtokF",
                 "RUNNER_SECRET": "runner-secret",
                 "DB_PATH": str(workdir / "game.db"),
                 "DATA_DIR": str(workdir / "data"),
@@ -979,12 +1179,12 @@ class OpenRouterGatewayTests(unittest.TestCase):
             from fastapi.testclient import TestClient
             import app
 
-            app.TEAMS["teamB"] = {{"ip": "127.0.0.1", "port": target_server.server_port, "name": "Team B"}}
+            app.TEAMS["team2"] = {{"ip": "127.0.0.1", "port": target_server.server_port, "name": "Team 2"}}
 
             with TestClient(app.app) as client:
                 app.state.start_round(1)
-                app.db.set_service_status("teamB", "OK")
-                app.db.upsert_flag(1, "teamB", "vuln1", flag)
+                app.db.set_service_status("team2", "OK")
+                app.db.upsert_flag(1, "team2", "vuln1", flag)
                 run = client.post(
                     "/agent-runs",
                     headers={{
@@ -992,11 +1192,27 @@ class OpenRouterGatewayTests(unittest.TestCase):
                         "X-Runner-Secret": "runner-secret",
                         "X-Agent-SDK": "hspace-agent-sdk/1",
                     }},
-                    json={{"team_id": "teamA", "mode": "attack", "target_team": "teamB", "round_num": 1}},
+                    json={{"team_id": "team1", "mode": "attack", "target_team": "team2", "round_num": 1}},
                 )
                 assert run.status_code == 200, run.text
-                run_token = run.json()["agent_run_token"]
+                run_data = run.json()
+                run_id = run_data["agent_run_id"]
+                run_token = run_data["agent_run_token"]
                 auth = {{"Authorization": "Bearer " + run_token}}
+
+                rejected_chat = client.post(
+                    "/v1/chat/completions",
+                    headers=auth,
+                    json={{
+                        "model": "meta-llama/llama-3.1-70b",
+                        "messages": [{{"role": "user", "content": "use a stronger model"}}],
+                    }},
+                )
+                assert rejected_chat.status_code == 403, rejected_chat.text
+                rejected_calls = app.db.list_llm_calls(run_id)
+                assert rejected_calls[0]["model"] == "meta-llama/llama-3.1-70b", rejected_calls
+                assert rejected_calls[0]["allowed"] == 0, rejected_calls
+                assert rejected_calls[0]["status"] == "rejected", rejected_calls
 
                 chat = client.post(
                     "/openrouter/api/v1/chat/completions",
@@ -1010,6 +1226,15 @@ class OpenRouterGatewayTests(unittest.TestCase):
                 assert chat.headers.get("x-llm-call-id"), chat.headers
                 assert chat.json()["hspace"]["llm_call_id"] == int(chat.headers["x-llm-call-id"])
 
+                app.db.set_service_status("team2", "DOWN")
+                down_attack = client.post(
+                    "/agent/attack",
+                    headers=auth,
+                    json={{"path": "/probe", "method": "POST", "json_body": {{"q": "x"}}}},
+                )
+                assert down_attack.status_code == 503, down_attack.text
+
+                app.db.set_service_status("team2", "FAULTY")
                 attack = client.post(
                     "/agent/attack",
                     headers=auth,
@@ -1035,6 +1260,138 @@ class OpenRouterGatewayTests(unittest.TestCase):
         if result.returncode != 0:
             self.fail(result.stdout + result.stderr)
 
+    def test_defense_push_requires_whitelisted_defense_llm_call(self):
+        script = textwrap.dedent(
+            f"""
+            import os
+            import tempfile
+            from pathlib import Path
+
+            root = Path({str(ROOT)!r})
+            workdir = Path(tempfile.mkdtemp())
+            os.environ.update({{
+                "ADMIN_SECRET": "admin",
+                "TOKEN_TEAM_1": "tokA",
+                "TOKEN_TEAM_2": "tokB",
+                "TOKEN_TEAM_3": "tokC",
+                "TOKEN_TEAM_4": "tokD",
+                "TOKEN_TEAM_5": "tokE",
+                "TOKEN_TEAM_6": "tokF",
+                "DEFENSE_TOKEN_TEAM_1": "dtokA",
+                "DEFENSE_TOKEN_TEAM_2": "dtokB",
+                "DEFENSE_TOKEN_TEAM_3": "dtokC",
+                "DEFENSE_TOKEN_TEAM_4": "dtokD",
+                "DEFENSE_TOKEN_TEAM_5": "dtokE",
+                "DEFENSE_TOKEN_TEAM_6": "dtokF",
+                "RUNNER_SECRET": "runner-secret",
+                "DB_PATH": str(workdir / "game.db"),
+                "DATA_DIR": str(workdir / "data"),
+                "VULN_SPEC_DIR": str(workdir / "vuln_specs"),
+                "REPOS_DIR": str(workdir / "repos"),
+            }})
+            (workdir / "vuln_specs").mkdir()
+            (workdir / "repos").mkdir()
+
+            import sys
+            sys.path.insert(0, str(root / "coordinator"))
+            from fastapi.testclient import TestClient
+            import app
+
+            with TestClient(app.app) as client:
+                app.state.start_round(1)
+                run = client.post(
+                    "/agent-runs",
+                    headers={{
+                        "X-Team-Token": "dtokB",
+                        "X-Runner-Secret": "runner-secret",
+                        "X-Agent-SDK": "hspace-agent-sdk/1",
+                    }},
+                    json={{"team_id": "team2", "mode": "defense", "target_team": "team1", "round_num": 1}},
+                )
+                assert run.status_code == 200, run.text
+                run_id = run.json()["agent_run_id"]
+                validation = {{
+                    "repo_team_id": "team1",
+                    "pusher_team_id": "team2",
+                    "commit": "deadbeef",
+                    "agent_run_id": run_id,
+                }}
+
+                no_llm = client.post(
+                    "/admin/validate-defense-push",
+                    headers={{"X-Admin-Secret": "admin"}},
+                    json=validation,
+                )
+                assert no_llm.status_code == 403, no_llm.text
+
+                app.db.append_llm_call(
+                    agent_run_id=run_id,
+                    model="openai/gpt-4o-mini",
+                    allowed=True,
+                    prompt_hash="scan-prompt",
+                    response_hash="scan-response",
+                    purpose="scan",
+                    status="completed",
+                )
+                wrong_purpose = client.post(
+                    "/admin/validate-defense-push",
+                    headers={{"X-Admin-Secret": "admin"}},
+                    json=validation,
+                )
+                assert wrong_purpose.status_code == 403, wrong_purpose.text
+
+                app.db.append_llm_call(
+                    agent_run_id=run_id,
+                    model="meta-llama/llama-3.1-70b",
+                    allowed=False,
+                    prompt_hash="defense-prompt",
+                    response_hash=None,
+                    purpose="defense",
+                    status="rejected",
+                )
+                rejected_model = client.post(
+                    "/admin/validate-defense-push",
+                    headers={{"X-Admin-Secret": "admin"}},
+                    json=validation,
+                )
+                assert rejected_model.status_code == 403, rejected_model.text
+
+                app.db.append_llm_call(
+                    agent_run_id=run_id,
+                    model="openai/gpt-4o-mini",
+                    allowed=True,
+                    prompt_hash="defense-prompt",
+                    response_hash="defense-response",
+                    purpose="defense",
+                    status="completed",
+                )
+                accepted = client.post(
+                    "/admin/validate-defense-push",
+                    headers={{"X-Admin-Secret": "admin"}},
+                    json=validation,
+                )
+                assert accepted.status_code == 200, accepted.text
+
+                wrong_defender = client.post(
+                    "/admin/validate-defense-push",
+                    headers={{"X-Admin-Secret": "admin"}},
+                    json={{**validation, "repo_team_id": "team2"}},
+                )
+                assert wrong_defender.status_code == 403, wrong_defender.text
+
+                app.db.finish_agent_run(run_id, "completed")
+                closed_run = client.post(
+                    "/admin/validate-defense-push",
+                    headers={{"X-Admin-Secret": "admin"}},
+                    json=validation,
+                )
+                assert closed_run.status_code == 403, closed_run.text
+            """
+        )
+        result = subprocess.run([sys.executable, "-c", script], cwd=ROOT, capture_output=True, text=True, timeout=30)
+        if result.returncode != 0:
+            self.fail(result.stdout + result.stderr)
+
     def test_agent_run_and_git_security_gates(self):
         script = textwrap.dedent(
             f"""
@@ -1047,20 +1404,18 @@ class OpenRouterGatewayTests(unittest.TestCase):
             workdir = Path(tempfile.mkdtemp())
             os.environ.update({{
                 "ADMIN_SECRET": "admin",
-                "TOKEN_TEAM_A": "tokA",
-                "TOKEN_TEAM_B": "tokB",
-                "TOKEN_TEAM_C": "tokC",
-                "TOKEN_TEAM_D": "tokD",
-                "TOKEN_TEAM_E": "tokE",
-                "TOKEN_TEAM_F": "tokF",
-                "TOKEN_TEAM_G": "tokG",
-                "DEFENSE_TOKEN_TEAM_A": "dtokA",
-                "DEFENSE_TOKEN_TEAM_B": "dtokB",
-                "DEFENSE_TOKEN_TEAM_C": "dtokC",
-                "DEFENSE_TOKEN_TEAM_D": "dtokD",
-                "DEFENSE_TOKEN_TEAM_E": "dtokE",
-                "DEFENSE_TOKEN_TEAM_F": "dtokF",
-                "DEFENSE_TOKEN_TEAM_G": "dtokG",
+                "TOKEN_TEAM_1": "tokA",
+                "TOKEN_TEAM_2": "tokB",
+                "TOKEN_TEAM_3": "tokC",
+                "TOKEN_TEAM_4": "tokD",
+                "TOKEN_TEAM_5": "tokE",
+                "TOKEN_TEAM_6": "tokF",
+                "DEFENSE_TOKEN_TEAM_1": "dtokA",
+                "DEFENSE_TOKEN_TEAM_2": "dtokB",
+                "DEFENSE_TOKEN_TEAM_3": "dtokC",
+                "DEFENSE_TOKEN_TEAM_4": "dtokD",
+                "DEFENSE_TOKEN_TEAM_5": "dtokE",
+                "DEFENSE_TOKEN_TEAM_6": "dtokF",
                 "DB_PATH": str(workdir / "game.db"),
                 "DATA_DIR": str(workdir / "data"),
                 "VULN_SPEC_DIR": str(workdir / "vuln_specs"),
@@ -1079,19 +1434,19 @@ class OpenRouterGatewayTests(unittest.TestCase):
                 run = client.post(
                     "/agent-runs",
                     headers={{"X-Team-Token": "tokA", "X-Agent-SDK": "hspace-agent-sdk/1"}},
-                    json={{"team_id": "teamA", "mode": "attack", "target_team": "teamB", "round_num": 1}},
+                    json={{"team_id": "team1", "mode": "attack", "target_team": "team2", "round_num": 1}},
                 )
                 assert run.status_code == 503, run.text
 
-                invalid_service = client.get("/git/teamA/info/refs?service=sh")
+                invalid_service = client.get("/git/team1/info/refs?service=sh")
                 assert invalid_service.status_code == 400, invalid_service.text
 
-                unauth_read = client.get("/git/teamA/info/refs?service=git-upload-pack")
+                unauth_read = client.get("/git/team1/info/refs?service=git-upload-pack")
                 assert unauth_read.status_code == 401, unauth_read.text
 
-                raw = base64.b64encode(b"teamA:tokA").decode()
+                raw = base64.b64encode(b"team1:tokA").decode()
                 auth_read = client.get(
-                    "/git/teamA/info/refs?service=git-upload-pack",
+                    "/git/team1/info/refs?service=git-upload-pack",
                     headers={{"Authorization": "Basic " + raw}},
                 )
                 assert auth_read.status_code == 200, auth_read.text
@@ -1115,20 +1470,18 @@ class OpenRouterGatewayTests(unittest.TestCase):
             workdir = Path(tempfile.mkdtemp())
             os.environ.update({{
                 "ADMIN_SECRET": "admin",
-                "TOKEN_TEAM_A": "tokA",
-                "TOKEN_TEAM_B": "tokB",
-                "TOKEN_TEAM_C": "tokC",
-                "TOKEN_TEAM_D": "tokD",
-                "TOKEN_TEAM_E": "tokE",
-                "TOKEN_TEAM_F": "tokF",
-                "TOKEN_TEAM_G": "tokG",
-                "DEFENSE_TOKEN_TEAM_A": "dtokA",
-                "DEFENSE_TOKEN_TEAM_B": "dtokB",
-                "DEFENSE_TOKEN_TEAM_C": "dtokC",
-                "DEFENSE_TOKEN_TEAM_D": "dtokD",
-                "DEFENSE_TOKEN_TEAM_E": "dtokE",
-                "DEFENSE_TOKEN_TEAM_F": "dtokF",
-                "DEFENSE_TOKEN_TEAM_G": "dtokG",
+                "TOKEN_TEAM_1": "tokA",
+                "TOKEN_TEAM_2": "tokB",
+                "TOKEN_TEAM_3": "tokC",
+                "TOKEN_TEAM_4": "tokD",
+                "TOKEN_TEAM_5": "tokE",
+                "TOKEN_TEAM_6": "tokF",
+                "DEFENSE_TOKEN_TEAM_1": "dtokA",
+                "DEFENSE_TOKEN_TEAM_2": "dtokB",
+                "DEFENSE_TOKEN_TEAM_3": "dtokC",
+                "DEFENSE_TOKEN_TEAM_4": "dtokD",
+                "DEFENSE_TOKEN_TEAM_5": "dtokE",
+                "DEFENSE_TOKEN_TEAM_6": "dtokF",
                 "RUNNER_SECRET": "runner-secret",
                 "DB_PATH": str(workdir / "game.db"),
                 "DATA_DIR": str(workdir / "data"),
@@ -1160,9 +1513,9 @@ class OpenRouterGatewayTests(unittest.TestCase):
 
             with TestClient(app.app) as client:
                 app.state.start_round(1)
-                app.db.set_service_status("teamB", "OK")
+                app.db.set_service_status("team2", "OK")
                 flag = "HSPACE" + chr(123) + "0123456789abcdef0123456789abcdef" + chr(125)
-                app.db.upsert_flag(1, "teamB", "vuln1", flag)
+                app.db.upsert_flag(1, "team2", "vuln1", flag)
 
                 run = client.post(
                     "/agent-runs",
@@ -1171,7 +1524,7 @@ class OpenRouterGatewayTests(unittest.TestCase):
                         "X-Runner-Secret": "runner-secret",
                         "X-Agent-SDK": "hspace-agent-sdk/1",
                     }},
-                    json={{"team_id": "teamA", "mode": "attack", "target_team": "teamB", "round_num": 1}},
+                    json={{"team_id": "team1", "mode": "attack", "target_team": "team2", "round_num": 1}},
                 )
                 assert run.status_code == 200, run.text
                 run_data = run.json()
@@ -1195,8 +1548,8 @@ class OpenRouterGatewayTests(unittest.TestCase):
                     data={{
                         "agent_run_id": run_id,
                         "llm_call_id": str(llm_call_id),
-                        "attacker_team": "teamA",
-                        "target_team": "teamB",
+                        "attacker_team": "team1",
+                        "target_team": "team2",
                         "flag_id": "vuln1",
                         "sha256": poc_sha,
                     }},
@@ -1208,8 +1561,8 @@ class OpenRouterGatewayTests(unittest.TestCase):
                 assert body["run_result"]["status"] == "success", body
                 assert body["run_result"]["scored"] == 1, body
                 scores = app.db.get_all_scores()
-                assert scores["teamA"]["score"] == 1010, scores
-                assert scores["teamC"]["score"] == 990, scores
+                assert scores["team1"]["score"] == 1010, scores
+                assert scores["team3"]["score"] == 990, scores
                 scoreboard = client.get("/scoreboard")
                 assert scoreboard.status_code == 200, scoreboard.text
                 public_result = scoreboard.json()["poc_results"][0]
