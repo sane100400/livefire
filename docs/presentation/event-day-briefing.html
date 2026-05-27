@@ -5,22 +5,48 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>HSPACE LiveFire A&amp;D 대회 안내</title>
   <style>
+    @font-face {
+      font-family: "DeckSans";
+      font-style: normal;
+      font-weight: 400;
+      src: url("fonts/Pretendard-400.woff") format("woff");
+    }
+
+    @font-face {
+      font-family: "DeckSans";
+      font-style: normal;
+      font-weight: 600;
+      src: url("fonts/Pretendard-600.woff") format("woff");
+    }
+
+    @font-face {
+      font-family: "DeckSans";
+      font-style: normal;
+      font-weight: 700;
+      src: url("fonts/Pretendard-700.woff") format("woff");
+    }
+
+    @font-face {
+      font-family: "DeckSans";
+      font-style: normal;
+      font-weight: 800;
+      src: url("fonts/Pretendard-800.woff") format("woff");
+    }
+
     :root {
-      --bg: #090d11;
-      --surface: #121a21;
-      --surface-2: #1d2832;
-      --ink: #fff5e8;
-      --muted: #b8c7ce;
-      --line: rgba(255, 245, 232, 0.18);
-      --line-strong: rgba(255, 245, 232, 0.34);
-      --red: #ff5638;
-      --green: #45d6b2;
-      --yellow: #f3be59;
-      --blue: #76a8ff;
-      --danger: #ff6680;
-      --radius: 8px;
-      --pad: clamp(36px, 5.8vw, 86px);
-      --shadow: 0 28px 80px rgba(0, 0, 0, 0.36);
+      --paper: #fbf7ee;
+      --paper-2: #f1eadf;
+      --ink: #141719;
+      --muted: #555d62;
+      --line: #171a1d;
+      --line-soft: rgba(20, 23, 25, 0.18);
+      --red: #c63827;
+      --green: #126a55;
+      --yellow: #9b650e;
+      --blue: #254f91;
+      --danger: #a82439;
+      --radius: 4px;
+      --pad: clamp(38px, 5.2vw, 76px);
       --ease: cubic-bezier(0.22, 1, 0.36, 1);
     }
 
@@ -29,10 +55,10 @@
     }
 
     html {
-      background: var(--bg);
+      background: var(--paper-2);
       color: var(--ink);
-      font-family: "Pretendard", "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", system-ui, sans-serif;
-      line-height: 1.25;
+      font-family: "DeckSans", "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif;
+      line-height: 1.22;
       scroll-behavior: smooth;
     }
 
@@ -47,11 +73,9 @@
 
     .toolbar {
       align-items: center;
-      backdrop-filter: blur(16px);
-      background: rgba(9, 13, 17, 0.76);
-      border: 1px solid var(--line);
+      background: rgba(20, 23, 25, 0.92);
+      border: 1px solid rgba(251, 247, 238, 0.18);
       border-radius: 999px;
-      box-shadow: 0 18px 48px rgba(0, 0, 0, 0.34);
       display: flex;
       gap: 8px;
       padding: 8px;
@@ -63,13 +87,13 @@
 
     .toolbar button {
       align-items: center;
-      background: rgba(255, 245, 232, 0.09);
-      border: 1px solid var(--line);
+      background: transparent;
+      border: 1px solid rgba(251, 247, 238, 0.28);
       border-radius: 999px;
-      color: var(--ink);
+      color: var(--paper);
       cursor: pointer;
       display: inline-flex;
-      font-weight: 900;
+      font-weight: 800;
       justify-content: center;
       min-height: 42px;
       min-width: 42px;
@@ -77,33 +101,32 @@
     }
 
     .toolbar button:hover {
-      background: rgba(255, 245, 232, 0.15);
-      border-color: var(--line-strong);
+      background: rgba(251, 247, 238, 0.12);
     }
 
     .toolbar button:focus-visible {
-      outline: 3px solid rgba(69, 214, 178, 0.72);
+      outline: 3px solid var(--red);
       outline-offset: 3px;
     }
 
     .toolbar .print {
-      background: var(--red);
-      border-color: transparent;
-      color: #1c0805;
-      min-width: 132px;
+      background: var(--paper);
+      border-color: var(--paper);
+      color: var(--ink);
+      min-width: 126px;
     }
 
     .counter {
-      color: var(--muted);
+      color: var(--paper);
       font-size: 14px;
-      font-weight: 900;
+      font-weight: 800;
       min-width: 58px;
       text-align: center;
     }
 
     .progress {
-      background: rgba(255, 245, 232, 0.12);
-      height: 4px;
+      background: rgba(20, 23, 25, 0.12);
+      height: 5px;
       left: 0;
       position: fixed;
       right: 0;
@@ -112,77 +135,65 @@
     }
 
     .progress span {
-      background: linear-gradient(90deg, var(--red), var(--green), var(--yellow), var(--blue));
+      background: var(--red);
       display: block;
       height: 100%;
       transform-origin: left center;
       transform: scaleX(0.07);
-      transition: transform 240ms var(--ease);
+      transition: transform 220ms var(--ease);
+    }
+
+    .deck {
+      counter-reset: slide;
     }
 
     .slide {
-      background:
-        linear-gradient(120deg, rgba(255, 86, 56, 0.14), transparent 36%),
-        radial-gradient(circle at 83% 16%, rgba(69, 214, 178, 0.12), transparent 30%),
-        linear-gradient(180deg, var(--surface), var(--bg));
-      border-bottom: 1px solid var(--line);
-      display: flex;
-      flex-direction: column;
-      gap: clamp(24px, 3.2vw, 44px);
-      justify-content: space-between;
+      background: var(--paper);
+      border-bottom: 2px solid var(--line);
+      counter-increment: slide;
+      display: grid;
+      gap: clamp(24px, 3.1vw, 42px);
+      grid-template-rows: auto minmax(0, 1fr) auto;
       min-height: 100svh;
       overflow: hidden;
       padding: var(--pad);
       position: relative;
     }
 
-    .slide:nth-child(3n + 2) {
-      background:
-        linear-gradient(120deg, rgba(118, 168, 255, 0.15), transparent 36%),
-        radial-gradient(circle at 80% 18%, rgba(243, 190, 89, 0.12), transparent 28%),
-        linear-gradient(180deg, #111a24, var(--bg));
-    }
-
-    .slide:nth-child(3n + 3) {
-      background:
-        linear-gradient(120deg, rgba(69, 214, 178, 0.13), transparent 36%),
-        radial-gradient(circle at 78% 22%, rgba(255, 102, 128, 0.12), transparent 30%),
-        linear-gradient(180deg, #10191d, var(--bg));
-    }
-
     .slide::before {
-      background: linear-gradient(90deg, var(--red), var(--green), var(--yellow), var(--blue));
-      content: "";
-      height: 6px;
-      left: var(--pad);
+      border-bottom: 2px solid var(--line);
+      color: var(--red);
+      content: counter(slide, decimal-leading-zero);
+      font-size: clamp(42px, 5.4vw, 82px);
+      font-weight: 800;
+      font-variant-numeric: tabular-nums;
+      letter-spacing: 0;
+      line-height: 0.9;
+      padding-bottom: 16px;
       position: absolute;
       right: var(--pad);
-      top: 0;
-    }
-
-    .slide::after {
-      background-image:
-        linear-gradient(rgba(255, 245, 232, 0.045) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(255, 245, 232, 0.04) 1px, transparent 1px);
-      background-size: 48px 48px;
-      content: "";
-      inset: 0;
-      mask-image: linear-gradient(180deg, transparent, black 18%, black 78%, transparent);
-      opacity: 0.55;
-      pointer-events: none;
-      position: absolute;
+      text-align: right;
+      top: var(--pad);
+      width: clamp(92px, 10vw, 150px);
     }
 
     .slide > * {
+      min-width: 0;
       position: relative;
       z-index: 1;
+    }
+
+    .slide header {
+      border-top: 2px solid var(--line);
+      padding-top: 18px;
+      padding-right: clamp(118px, 15vw, 210px);
     }
 
     .body {
       align-content: center;
       display: grid;
-      flex: 1;
-      gap: clamp(22px, 3.4vw, 46px);
+      gap: clamp(18px, 2.4vw, 34px);
+      min-height: 0;
     }
 
     .center {
@@ -190,11 +201,20 @@
     }
 
     .kicker {
-      color: var(--green);
-      font-size: clamp(18px, 1.55vw, 25px);
-      font-weight: 1000;
+      color: var(--red);
+      font-size: clamp(54px, 6vw, 90px);
+      font-weight: 800;
       letter-spacing: 0;
+      line-height: 0.96;
       margin: 0 0 18px;
+      text-transform: none;
+    }
+
+    .slide:first-child .kicker {
+      font-size: clamp(16px, 1.25vw, 21px);
+      letter-spacing: 0.04em;
+      line-height: 1.2;
+      margin-bottom: 14px;
       text-transform: uppercase;
     }
 
@@ -203,43 +223,51 @@
     h3,
     p {
       margin-top: 0;
+      overflow-wrap: break-word;
+      text-wrap: balance;
+      word-break: keep-all;
     }
 
     h1 {
-      font-size: clamp(72px, 9.2vw, 142px);
+      font-size: clamp(76px, 9vw, 128px);
+      font-weight: 800;
       letter-spacing: 0;
       line-height: 0.92;
-      margin-bottom: 26px;
-      max-width: 1180px;
+      margin-bottom: 22px;
+      max-width: 1060px;
     }
 
     h2 {
-      font-size: clamp(54px, 6vw, 92px);
-      letter-spacing: 0;
-      line-height: 0.98;
-      margin-bottom: 22px;
-      max-width: 1220px;
-    }
-
-    h3 {
-      font-size: clamp(30px, 2.8vw, 44px);
-      letter-spacing: 0;
-      line-height: 1.05;
-      margin-bottom: 14px;
-    }
-
-    .lead {
       color: var(--muted);
-      font-size: clamp(30px, 3.1vw, 46px);
-      line-height: 1.28;
+      font-size: clamp(30px, 2.8vw, 43px);
+      font-weight: 700;
+      letter-spacing: 0;
+      line-height: 1.22;
       margin-bottom: 0;
       max-width: 1120px;
     }
 
+    h3 {
+      font-size: clamp(26px, 2.35vw, 38px);
+      font-weight: 800;
+      letter-spacing: 0;
+      line-height: 1.08;
+      margin-bottom: 12px;
+    }
+
+    .lead {
+      color: var(--muted);
+      font-size: clamp(27px, 2.55vw, 39px);
+      font-weight: 700;
+      line-height: 1.34;
+      margin-bottom: 0;
+      max-width: 980px;
+    }
+
     .text {
       color: var(--muted);
-      font-size: clamp(24px, 2.15vw, 34px);
-      line-height: 1.35;
+      font-size: clamp(22px, 1.85vw, 30px);
+      line-height: 1.38;
       margin-bottom: 0;
     }
 
@@ -251,15 +279,15 @@
 
     .split {
       display: grid;
-      gap: clamp(26px, 4vw, 58px);
-      grid-template-columns: minmax(0, 1.06fr) minmax(360px, 0.94fr);
+      gap: clamp(22px, 3vw, 42px);
+      grid-template-columns: minmax(0, 1.08fr) minmax(340px, 0.92fr);
     }
 
     .grid-2,
     .grid-3,
     .grid-4 {
       display: grid;
-      gap: 18px;
+      gap: 16px;
     }
 
     .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -272,309 +300,343 @@
     .team,
     .rule,
     .terminal {
-      background: rgba(255, 245, 232, 0.078);
-      border: 1px solid var(--line);
+      background: #fffdf8;
+      border: 2px solid var(--line);
       border-radius: var(--radius);
-      box-shadow: var(--shadow);
+      color: var(--ink);
     }
 
     .card,
     .rule {
-      min-height: 178px;
-      padding: clamp(24px, 2.6vw, 36px);
+      min-height: 154px;
+      padding: clamp(20px, 2vw, 30px);
     }
 
     .card p,
     .rule p {
       color: var(--muted);
-      font-size: clamp(24px, 2vw, 32px);
-      line-height: 1.32;
+      font-size: clamp(22px, 1.72vw, 28px);
+      font-weight: 600;
+      line-height: 1.34;
       margin-bottom: 0;
     }
 
     .chip-row {
+      align-content: start;
       display: flex;
       flex-wrap: wrap;
-      gap: 14px;
+      gap: 12px;
     }
 
     .chip {
       align-items: center;
-      background: rgba(255, 245, 232, 0.1);
-      border: 1px solid var(--line);
+      background: #fffdf8;
+      border: 2px solid var(--line);
       border-radius: 999px;
       color: var(--ink);
       display: inline-flex;
-      font-size: clamp(22px, 1.9vw, 30px);
-      font-weight: 900;
-      min-height: 50px;
-      padding: 10px 18px;
+      font-size: clamp(20px, 1.65vw, 27px);
+      font-weight: 800;
+      min-height: 48px;
+      padding: 9px 17px;
       white-space: nowrap;
     }
 
     .chip.good {
-      background: rgba(69, 214, 178, 0.14);
-      border-color: rgba(69, 214, 178, 0.42);
-      color: #c8fff0;
+      border-color: var(--green);
+      color: var(--green);
     }
 
     .chip.warn {
-      background: rgba(243, 190, 89, 0.14);
-      border-color: rgba(243, 190, 89, 0.42);
-      color: #ffe4a9;
+      border-color: var(--yellow);
+      color: var(--yellow);
     }
 
     .chip.bad {
-      background: rgba(255, 102, 128, 0.14);
-      border-color: rgba(255, 102, 128, 0.42);
-      color: #ffd0d8;
+      border-color: var(--danger);
+      color: var(--danger);
     }
 
     .route {
       display: grid;
-      gap: 16px;
+      gap: 14px;
       grid-template-columns: repeat(4, minmax(0, 1fr));
-      margin-top: 40px;
+      margin-top: 22px;
     }
 
     .route .card {
-      min-height: 180px;
+      display: grid;
+      min-height: 158px;
+      padding-top: 24px;
     }
 
     .route b {
       color: var(--ink);
       display: block;
-      font-size: clamp(32px, 2.8vw, 45px);
+      font-size: clamp(31px, 2.65vw, 43px);
+      font-weight: 800;
       line-height: 1.02;
-      margin-bottom: 16px;
+      margin-bottom: 12px;
+      word-break: keep-all;
     }
 
     .route span {
       color: var(--muted);
       display: block;
-      font-size: clamp(22px, 1.8vw, 28px);
+      font-size: clamp(20px, 1.6vw, 26px);
+      font-weight: 700;
       line-height: 1.28;
+      word-break: keep-all;
     }
 
     .list {
       display: grid;
-      gap: 16px;
+      gap: 12px;
       list-style: none;
       margin: 0;
       padding: 0;
     }
 
     .list li {
-      background: rgba(255, 245, 232, 0.078);
-      border: 1px solid var(--line);
+      background: #fffdf8;
+      border: 2px solid var(--line);
       border-radius: var(--radius);
       color: var(--muted);
-      font-size: clamp(28px, 2.55vw, 40px);
-      font-weight: 800;
-      line-height: 1.25;
-      min-height: 86px;
-      padding: 22px 28px;
+      font-size: clamp(25px, 2.2vw, 34px);
+      font-weight: 700;
+      line-height: 1.22;
+      min-height: 74px;
+      overflow-wrap: break-word;
+      padding: 18px 24px;
+      text-wrap: balance;
+      word-break: keep-all;
     }
 
     .list strong {
       color: var(--ink);
+      font-weight: 800;
     }
 
     .stack {
       display: grid;
-      gap: 15px;
+      gap: 12px;
     }
 
     .row {
-      box-shadow: none;
       display: grid;
-      gap: 22px;
-      grid-template-columns: minmax(220px, 0.36fr) minmax(0, 1fr);
-      min-height: 88px;
-      padding: 22px 26px;
+      gap: 18px;
+      grid-template-columns: minmax(150px, 0.32fr) minmax(0, 1fr);
+      min-height: 80px;
+      padding: 19px 22px;
     }
 
     .row strong {
-      color: var(--ink);
-      font-size: clamp(28px, 2.35vw, 38px);
+      color: var(--red);
+      font-size: clamp(25px, 2.05vw, 34px);
+      font-weight: 800;
       line-height: 1.04;
+      word-break: keep-all;
     }
 
     .row span {
       color: var(--muted);
-      font-size: clamp(24px, 2vw, 31px);
-      line-height: 1.32;
+      font-size: clamp(22px, 1.74vw, 29px);
+      font-weight: 600;
+      line-height: 1.33;
+      word-break: keep-all;
     }
 
     .flow {
       display: grid;
-      gap: 16px;
+      gap: 14px;
       grid-template-columns: repeat(5, minmax(0, 1fr));
     }
 
     .flow .card {
-      min-height: 220px;
+      min-height: 192px;
     }
 
     .flow b {
       color: var(--ink);
       display: block;
-      font-size: clamp(30px, 2.45vw, 40px);
-      line-height: 1.04;
-      margin-bottom: 16px;
+      font-size: clamp(27px, 2.1vw, 36px);
+      font-weight: 800;
+      line-height: 1.05;
+      margin-bottom: 12px;
+      word-break: keep-all;
     }
 
     .flow span {
       color: var(--muted);
       display: block;
-      font-size: clamp(22px, 1.75vw, 28px);
+      font-size: clamp(19px, 1.45vw, 25px);
+      font-weight: 700;
       line-height: 1.28;
+      word-break: keep-all;
     }
 
     .metric-grid {
       display: grid;
-      gap: 18px;
+      gap: 14px;
       grid-template-columns: repeat(4, minmax(0, 1fr));
     }
 
     .metric {
-      min-height: 190px;
-      padding: 26px;
+      min-height: 176px;
+      padding: 24px;
     }
 
     .metric strong {
-      color: var(--ink);
+      color: var(--red);
       display: block;
-      font-size: clamp(56px, 5.4vw, 90px);
+      font-size: clamp(50px, 4.9vw, 78px);
+      font-weight: 800;
+      font-variant-numeric: tabular-nums;
       letter-spacing: 0;
       line-height: 0.92;
       margin-bottom: 18px;
     }
 
     .metric span {
-      color: var(--muted);
+      color: var(--ink);
       display: block;
-      font-size: clamp(23px, 1.9vw, 31px);
-      line-height: 1.28;
+      font-size: clamp(21px, 1.65vw, 28px);
+      font-weight: 800;
+      line-height: 1.24;
+      word-break: keep-all;
     }
 
     .swap {
       display: grid;
-      gap: 16px;
+      gap: 12px;
       grid-template-columns: repeat(3, minmax(0, 1fr));
     }
 
     .team {
-      box-shadow: none;
-      min-height: 150px;
-      padding: 24px;
+      min-height: 132px;
+      padding: 22px;
     }
 
     .team strong {
-      color: var(--ink);
+      color: var(--red);
       display: block;
-      font-size: clamp(36px, 3.4vw, 58px);
+      font-size: clamp(34px, 3vw, 50px);
+      font-weight: 800;
       line-height: 0.95;
-      margin-bottom: 14px;
+      margin-bottom: 12px;
     }
 
     .team span {
-      color: var(--muted);
+      color: var(--ink);
       display: block;
-      font-size: clamp(24px, 2vw, 32px);
-      line-height: 1.25;
+      font-size: clamp(22px, 1.8vw, 30px);
+      font-weight: 800;
+      line-height: 1.22;
+      word-break: keep-all;
     }
 
     .table {
+      background: #fffdf8;
+      border: 2px solid var(--line);
       border-collapse: collapse;
-      font-size: clamp(25px, 2.1vw, 34px);
-      overflow: hidden;
+      font-size: clamp(23px, 1.9vw, 31px);
+      font-weight: 700;
+      line-height: 1.25;
+      table-layout: fixed;
       width: 100%;
     }
 
     .table th,
     .table td {
-      border-bottom: 1px solid var(--line);
-      padding: 20px 22px;
+      border-bottom: 2px solid var(--line);
+      padding: 16px 18px;
       text-align: left;
       vertical-align: top;
+      overflow-wrap: anywhere;
+      word-break: keep-all;
     }
 
     .table th {
-      color: var(--green);
-      font-size: clamp(22px, 1.75vw, 28px);
-      font-weight: 1000;
+      color: var(--red);
+      font-size: clamp(20px, 1.55vw, 26px);
+      font-weight: 800;
+    }
+
+    .table td:first-child {
+      color: var(--ink);
+      font-weight: 800;
+      font-variant-numeric: tabular-nums;
     }
 
     .table tr:last-child td {
       border-bottom: 0;
     }
 
+    .timetable {
+      font-size: clamp(18px, 1.45vw, 24px);
+    }
+
+    .timetable th,
+    .timetable td {
+      padding: 12px 15px;
+    }
+
     .badge {
+      border: 2px solid currentColor;
       border-radius: 999px;
       display: inline-flex;
-      font-weight: 1000;
+      font-weight: 800;
       justify-content: center;
       min-width: 96px;
       padding: 8px 14px;
     }
 
-    .plus {
-      background: rgba(69, 214, 178, 0.14);
-      color: #c8fff0;
-    }
-
-    .minus {
-      background: rgba(255, 102, 128, 0.14);
-      color: #ffd0d8;
-    }
-
-    .zero {
-      background: rgba(255, 245, 232, 0.1);
-      color: var(--muted);
-    }
+    .plus { color: var(--green); }
+    .minus { color: var(--danger); }
+    .zero { color: var(--muted); }
 
     .callout {
-      background: rgba(255, 86, 56, 0.14);
-      border: 1px solid rgba(255, 86, 56, 0.42);
+      background: #fffdf8;
+      border: 3px solid var(--red);
       border-radius: var(--radius);
-      color: #ffd4cc;
-      font-size: clamp(30px, 2.8vw, 44px);
-      font-weight: 1000;
+      color: var(--red);
+      font-size: clamp(27px, 2.35vw, 38px);
+      font-weight: 800;
       line-height: 1.24;
-      padding: 28px 32px;
+      padding: 24px 28px;
+      text-wrap: balance;
+      word-break: keep-all;
     }
 
     .callout.good {
-      background: rgba(69, 214, 178, 0.13);
-      border-color: rgba(69, 214, 178, 0.42);
-      color: #d8fff5;
+      border-color: var(--green);
+      color: var(--green);
     }
 
     .terminal {
-      background: #070a0d;
-      border-color: rgba(69, 214, 178, 0.3);
-      color: #d9fff3;
-      font-family: "SFMono-Regular", "Cascadia Code", "Consolas", monospace;
-      font-size: clamp(21px, 1.85vw, 29px);
-      line-height: 1.55;
+      background: var(--ink);
+      border-color: var(--ink);
+      color: var(--paper);
+      font-family: "DeckSans", "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif;
+      font-size: clamp(20px, 1.55vw, 26px);
+      font-weight: 700;
+      line-height: 1.5;
       overflow: hidden;
     }
 
     .terminal-bar {
       align-items: center;
-      background: rgba(255, 245, 232, 0.06);
-      border-bottom: 1px solid var(--line);
+      border-bottom: 2px solid rgba(251, 247, 238, 0.26);
       display: flex;
       gap: 10px;
-      padding: 14px 18px;
+      padding: 12px 16px;
     }
 
     .dot {
       border-radius: 50%;
       display: inline-block;
-      height: 12px;
-      width: 12px;
+      height: 11px;
+      width: 11px;
     }
 
     .dot.red { background: var(--red); }
@@ -582,30 +644,36 @@
     .dot.green { background: var(--green); }
 
     .terminal pre {
+      font-family: inherit;
       margin: 0;
       overflow-wrap: anywhere;
-      padding: 24px;
+      padding: 22px;
       white-space: pre-wrap;
     }
 
     .footer {
-      align-items: center;
-      color: rgba(255, 245, 232, 0.54);
+      align-items: end;
+      border-top: 2px solid var(--line);
+      color: var(--muted);
       display: flex;
       font-size: 15px;
-      font-weight: 900;
+      font-weight: 800;
       justify-content: space-between;
+      padding-top: 14px;
+      text-transform: uppercase;
     }
 
     .footer span:last-child {
-      color: rgba(255, 245, 232, 0.36);
-      font-family: "SFMono-Regular", "Cascadia Code", "Consolas", monospace;
+      color: var(--red);
+      font-size: 19px;
+      font-variant-numeric: tabular-nums;
+      line-height: 1;
     }
 
     .reveal {
       opacity: 0;
-      transform: translateY(18px);
-      transition: opacity 520ms var(--ease), transform 520ms var(--ease);
+      transform: translateY(14px);
+      transition: opacity 420ms var(--ease), transform 420ms var(--ease);
     }
 
     .slide.is-active .reveal {
@@ -613,9 +681,9 @@
       transform: translateY(0);
     }
 
-    .slide.is-active .reveal:nth-child(2) { transition-delay: 80ms; }
-    .slide.is-active .reveal:nth-child(3) { transition-delay: 150ms; }
-    .slide.is-active .reveal:nth-child(4) { transition-delay: 220ms; }
+    .slide.is-active .reveal:nth-child(2) { transition-delay: 70ms; }
+    .slide.is-active .reveal:nth-child(3) { transition-delay: 130ms; }
+    .slide.is-active .reveal:nth-child(4) { transition-delay: 190ms; }
 
     @media (max-width: 980px) {
       .toolbar {
@@ -626,7 +694,19 @@
       }
 
       .slide {
-        padding: 86px clamp(22px, 5vw, 36px) 30px;
+        padding: 88px clamp(22px, 5vw, 34px) 30px;
+      }
+
+      .slide::before {
+        font-size: 34px;
+        padding-bottom: 8px;
+        right: clamp(22px, 5vw, 34px);
+        top: 88px;
+        width: 68px;
+      }
+
+      .slide header {
+        padding-right: 82px;
       }
 
       .split,
@@ -642,6 +722,19 @@
 
       .row {
         grid-template-columns: 1fr;
+      }
+
+      .table {
+        font-size: 16px;
+      }
+
+      .table th,
+      .table td {
+        padding: 10px;
+      }
+
+      .timetable {
+        font-size: 14px;
       }
     }
 
@@ -665,12 +758,13 @@
 
     @media print {
       :root {
-        --pad: 0.62in;
+        --pad: 0.52in;
       }
 
       html,
       body {
-        background: #fff;
+        background: #fffdf8;
+        color: #141719;
         height: auto;
         margin: 0;
         overflow: visible;
@@ -689,9 +783,11 @@
       }
 
       .slide {
+        background: #fffdf8 !important;
         break-after: page;
         break-inside: avoid;
         border: 0;
+        gap: 0.24in;
         height: 9in;
         min-height: 9in;
         overflow: hidden;
@@ -701,6 +797,36 @@
         width: 16in;
         -webkit-print-color-adjust: exact;
         print-color-adjust: exact;
+      }
+
+      .slide::before {
+        font-size: 54pt;
+        padding-bottom: 0.11in;
+        width: 1.2in;
+      }
+
+      .slide header {
+        padding-right: 1.55in;
+        padding-top: 0.14in;
+      }
+
+      .body {
+        gap: 0.18in;
+        min-height: 0;
+      }
+
+      .split {
+        gap: 0.24in;
+      }
+
+      .grid-2,
+      .grid-3,
+      .grid-4,
+      .route,
+      .flow,
+      .metric-grid,
+      .swap {
+        gap: 0.11in;
       }
 
       .slide:last-child {
@@ -713,10 +839,12 @@
         transform: none !important;
       }
 
-      h1 { font-size: 88pt; }
-      h2 { font-size: 58pt; }
-      h3 { font-size: 28pt; }
-      .lead { font-size: 30pt; }
+      h1 { font-size: 76pt; }
+      h2 { font-size: 27pt; }
+      h3 { font-size: 22pt; }
+      .kicker { font-size: 54pt; margin-bottom: 0.12in; }
+      .slide:first-child .kicker { font-size: 14pt; margin-bottom: 0.09in; }
+      .lead { font-size: 25pt; }
       .text,
       .card p,
       .rule p,
@@ -724,17 +852,85 @@
       .team span,
       .table,
       .terminal {
-        font-size: 22pt;
+        font-size: 17pt;
       }
-      .metric strong { font-size: 58pt; }
-      .callout { font-size: 29pt; }
       .card,
+      .rule {
+        min-height: 0;
+        padding: 0.18in;
+      }
+      .route .card,
+      .flow .card,
       .metric,
-      .row,
-      .team,
-      .rule,
+      .team {
+        min-height: 0;
+      }
+      .route b {
+        font-size: 25pt;
+      }
+      .route span,
+      .flow span,
+      .metric span {
+        font-size: 15pt;
+      }
+      .flow b {
+        font-size: 21pt;
+      }
+      .list {
+        gap: 0.08in;
+      }
+      .list li {
+        font-size: 18pt;
+        min-height: 0;
+        padding: 0.12in 0.16in;
+      }
+      .row {
+        min-height: 0;
+        padding: 0.13in 0.16in;
+      }
+      .row strong {
+        font-size: 20pt;
+      }
+      .table th,
+      .table td {
+        padding: 0.08in 0.11in;
+      }
       .terminal {
-        box-shadow: none;
+        background: #fffdf8 !important;
+        border-color: #141719;
+        color: #141719;
+      }
+      .terminal-bar {
+        border-bottom-color: #141719;
+        padding: 0.08in 0.12in;
+      }
+      .terminal pre {
+        line-height: 1.42;
+        padding: 0.14in;
+      }
+      .metric {
+        padding: 0.17in;
+      }
+      .metric strong { font-size: 45pt; }
+      .team {
+        padding: 0.15in;
+      }
+      .team strong { font-size: 28pt; }
+      .callout {
+        font-size: 22pt;
+        padding: 0.17in 0.2in;
+      }
+      .chip {
+        font-size: 15pt;
+        min-height: 0.36in;
+        padding: 0.07in 0.12in;
+      }
+      .footer {
+        font-size: 10pt;
+        padding-top: 0.1in;
+      }
+      .footer span:last-child {
+        font-size: 14pt;
       }
     }
   </style>
@@ -742,7 +938,7 @@
 <body>
   <div class="toolbar" aria-label="프레젠테이션 제어">
     <button type="button" data-action="prev" aria-label="이전 슬라이드">‹</button>
-    <span class="counter" aria-live="polite">1 / 15</span>
+    <span class="counter" aria-live="polite">1 / 8</span>
     <button type="button" data-action="next" aria-label="다음 슬라이드">›</button>
     <button class="print" type="button" data-action="print">PDF 내보내기</button>
   </div>
@@ -753,14 +949,14 @@
       <header>
         <p class="kicker">HSPACE LiveFire A&amp;D</p>
         <h1>대회 안내</h1>
-        <p class="lead">서비스 발표, A&amp;D 진행 방식, 방어 서비스 스왑, 부정행위 기준만 크게 정리합니다.</p>
+        <p class="lead">팀별 취약 웹 서비스를 제출하고, 공식 agent가 공격과 방어를 수행하는 A&amp;D 대회입니다.</p>
       </header>
       <div class="body">
         <div class="route reveal">
-          <div class="card"><b>서비스</b><span>무엇을 만들었나</span></div>
-          <div class="card"><b>A&amp;D</b><span>어떻게 점수화되나</span></div>
-          <div class="card"><b>스왑</b><span>누가 누구를 지키나</span></div>
-          <div class="card"><b>공정성</b><span>무엇이 무효인가</span></div>
+          <div class="card"><b>서비스</b><span>Dockerfile, vuln_spec, 취약점 4개</span></div>
+          <div class="card"><b>라운드</b><span>30분 단위, 총 20라운드</span></div>
+          <div class="card"><b>Agent</b><span>공식 run token 기준 실행</span></div>
+          <div class="card"><b>채점</b><span>coordinator 기록 기준</span></div>
         </div>
       </div>
       <footer class="footer"><span>Competition guide</span><span>01</span></footer>
@@ -768,17 +964,23 @@
 
     <section class="slide" id="slide-2">
       <header>
-        <p class="kicker">오늘 진행</p>
-        <h2>발표가 끝나면 바로 경기 모드입니다.</h2>
+        <p class="kicker">Timetable</p>
+        <h2>행사 타임테이블</h2>
       </header>
       <div class="body">
-        <div class="metric-grid reveal">
-          <div class="metric"><strong>19:00</strong><span>서비스 발표</span></div>
-          <div class="metric"><strong>19:30</strong><span>A&amp;D 준비</span></div>
-          <div class="metric"><strong>20:00</strong><span>라운드 시작</span></div>
-          <div class="metric"><strong>06:00</strong><span>경기 종료</span></div>
-        </div>
-        <div class="callout good reveal">공식 판정은 coordinator 기록 기준입니다.</div>
+        <table class="table timetable reveal">
+          <thead>
+            <tr><th>시간</th><th>내용</th><th>운영</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>18:00-19:00</td><td>저녁식사</td><td>집결</td></tr>
+            <tr><td>19:00-19:30</td><td>서비스 발표</td><td>기획서 기반 구현 내용</td></tr>
+            <tr><td>19:30-20:00</td><td>A&amp;D 준비</td><td>접속, 배포, agent 점검</td></tr>
+            <tr><td>20:00-익일 06:00</td><td>A&amp;D 라운드</td><td>30분 단위, 총 20라운드</td></tr>
+            <tr><td>익일 06:00-06:30</td><td>점수 집계</td><td>coordinator 기록 확인</td></tr>
+            <tr><td>익일 06:30-07:00</td><td>시상식 후 귀가</td><td>최종 순위 안내</td></tr>
+          </tbody>
+        </table>
       </div>
       <footer class="footer"><span>Timeline</span><span>02</span></footer>
     </section>
@@ -786,294 +988,142 @@
     <section class="slide" id="slide-3">
       <header>
         <p class="kicker">서비스 발표</p>
-        <h2>취약점 풀이가 아니라 서비스 소개입니다.</h2>
+        <h2>기획서를 바탕으로 제출 서비스가 얼마나 구현되었는지 공유합니다.</h2>
       </header>
-      <div class="body grid-3">
+      <div class="body grid-2">
         <article class="card reveal">
-          <h3>서비스 컨셉</h3>
-          <p>누가 어떤 목적으로 쓰는 서비스인지 설명합니다.</p>
+          <h3>기획서 반영</h3>
+          <p>기획서의 서비스 목적을 어떻게 구현했는지 설명합니다.</p>
         </article>
         <article class="card reveal">
-          <h3>정상 기능</h3>
-          <p>살아 있어야 하는 주요 기능과 사용 흐름을 보여줍니다.</p>
+          <h3>핵심 기능</h3>
+          <p>주요 기능과 현재 정상 동작 여부를 보여줍니다.</p>
         </article>
         <article class="card reveal">
-          <h3>공격 표면</h3>
-          <p>입력, 저장, 조회 같은 구조만 설명합니다.</p>
+          <h3>구현 범위</h3>
+          <p>제출 시점에 구현 완료된 범위를 정리합니다.</p>
         </article>
-        <div class="callout reveal" style="grid-column: 1 / -1;">payload, flag 회수 방법, PoC 코드는 공개하지 않습니다.</div>
+        <article class="card reveal">
+          <h3>사용 흐름</h3>
+          <p>서비스 실행 및 기본 사용 흐름을 간단히 안내합니다.</p>
+        </article>
       </div>
-      <footer class="footer"><span>Service presentation</span><span>03</span></footer>
+      <footer class="footer"><span>Service</span><span>03</span></footer>
     </section>
 
     <section class="slide" id="slide-4">
       <header>
-        <p class="kicker">서비스 제출 계약</p>
-        <h2>세 가지가 없으면 공식 실행이 어렵습니다.</h2>
+        <p class="kicker">A&amp;D 라운드</p>
+        <h2>라운드마다 flag를 주입하고, PoC 실행 결과와 서비스 상태를 함께 채점합니다.</h2>
       </header>
-      <div class="body split">
-        <ul class="list reveal">
-          <li><strong>Dockerfile</strong>로 빌드/실행 가능</li>
-          <li><strong>vuln_spec.json</strong>에 검증 요청 선언</li>
-          <li><strong>서비스 코드</strong>와 취약점 4개 포함</li>
-        </ul>
-        <div class="card reveal">
-          <h3>취약점 ID는 고정</h3>
-          <p><span class="red">vuln1</span>, <span class="red">vuln2</span>, <span class="red">vuln3</span>, <span class="red">vuln4</span></p>
-          <p style="margin-top: 20px;">API 경로는 자유지만 검증은 재현 가능해야 합니다.</p>
-        </div>
+      <div class="body">
+        <table class="table reveal">
+          <thead>
+            <tr><th>순서</th><th>처리</th><th>기준</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>1</td><td>Flag 생성</td><td>coordinator가 현재 라운드 flag 생성</td></tr>
+            <tr><td>2</td><td>Agent 실행</td><td>공식 run token으로 공격/방어 agent 실행</td></tr>
+            <tr><td>3</td><td>PoC 검증</td><td>runner가 제출 PoC를 실행해 현재 flag 확인</td></tr>
+            <tr><td>4</td><td>Health 확인</td><td>coordinator와 팀 서비스 상태 확인</td></tr>
+            <tr><td>5</td><td>점수 반영</td><td>PoC 결과와 가용성 상태를 합산</td></tr>
+          </tbody>
+        </table>
       </div>
-      <footer class="footer"><span>Submission contract</span><span>04</span></footer>
+      <footer class="footer"><span>Round lifecycle</span><span>04</span></footer>
     </section>
 
     <section class="slide" id="slide-5">
       <header>
-        <p class="kicker">A&amp;D 한 라운드</p>
-        <h2>agent가 찾고, runner가 재현하고, coordinator가 채점합니다.</h2>
+        <p class="kicker">서버 가용성</p>
+        <h2>라운드 시작 전 coordinator와 팀 서비스 상태를 먼저 확인합니다.</h2>
       </header>
-      <div class="body">
-        <div class="flow reveal">
-          <div class="card"><b>Flag 주입</b><span>라운드마다 새 flag</span></div>
-          <div class="card"><b>공격 탐색</b><span>attack agent 실행</span></div>
-          <div class="card"><b>PoC 제출</b><span>재현 코드 제출</span></div>
-          <div class="card"><b>Runner 실행</b><span>격리 환경 검증</span></div>
-          <div class="card"><b>점수 반영</b><span>성공만 기록</span></div>
+      <div class="body split">
+        <div class="metric reveal">
+          <strong>PASS</strong>
+          <span>preflight가 실패하면 라운드를 시작하지 않습니다.</span>
+        </div>
+        <div class="stack reveal">
+          <div class="row"><strong>Gateway</strong><span>공개 진입점은 gateway :42000 기준으로 확인합니다.</span></div>
+          <div class="row"><strong>Team ports</strong><span>팀 서비스 공개 포트는 :42001-:42006입니다.</span></div>
+          <div class="row"><strong>Preflight</strong><span>coordinator health, 팀 서비스 health, flag 주입/회수, 기본 기능을 확인합니다.</span></div>
         </div>
       </div>
-      <footer class="footer"><span>Round lifecycle</span><span>05</span></footer>
+      <footer class="footer"><span>Server availability</span><span>05</span></footer>
     </section>
 
     <section class="slide" id="slide-6">
       <header>
-        <p class="kicker">공격 / PoC</p>
-        <h2>사람이 직접 제출한 PoC는 점수로 인정하지 않습니다.</h2>
+        <p class="kicker">Rate limit</p>
+        <h2>agent loop와 LLM 비용 폭주를 막기 위해 인증 단위 요청 제한을 적용합니다.</h2>
       </header>
-      <div class="body split">
-        <ul class="list reveal">
-          <li>공격 요청은 공식 wrapper 경유</li>
-          <li>라운드당 팀별 탐색 10턴</li>
-          <li>PoC는 runner에서 독립 실행</li>
-          <li>마지막 출력 줄에 현재 flag</li>
-        </ul>
-        <div class="terminal reveal">
-          <div class="terminal-bar"><span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span></div>
-          <pre>PoC 성공 조건
-1. 재현 가능한 Python 파일
-2. 공식 runner에서 실행
-3. 현재 flag를 마지막 줄에 출력</pre>
-        </div>
+      <div class="body">
+        <table class="table reveal">
+          <thead>
+            <tr><th>대상</th><th>기본 제한</th><th>의도</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>attack agent run</td><td>10/minute</td><td>공격 agent 재시작 루프 차단</td></tr>
+            <tr><td>defense agent run</td><td>5/minute</td><td>방어 agent 재시작 루프 차단</td></tr>
+            <tr><td>LLM wrapper</td><td>30/minute</td><td>LLM 비용/지연 폭주 방지</td></tr>
+            <tr><td>/agent/attack</td><td>20/minute</td><td>탐색 루프 완충</td></tr>
+            <tr><td>round attack turns</td><td>10/round</td><td>라운드 점수용 탐색 턴</td></tr>
+            <tr><td>/agent/pocs</td><td>12/minute</td><td>동일 PoC 제출 루프 차단</td></tr>
+          </tbody>
+        </table>
+        <div class="callout reveal">429가 반환되면 잠시 기다린 뒤 다시 시도합니다.</div>
       </div>
-      <footer class="footer"><span>Attack path</span><span>06</span></footer>
+      <footer class="footer"><span>Rate limit</span><span>06</span></footer>
     </section>
 
     <section class="slide" id="slide-7">
       <header>
-        <p class="kicker">방어</p>
-        <h2>방어 패치는 배정된 repo에만 가능합니다.</h2>
+        <p class="kicker">공격 / 방어</p>
+        <h2>공격과 방어 결과는 공식 agent 실행 기록을 기준으로 인정합니다.</h2>
       </header>
       <div class="body split">
-        <div class="stack reveal">
-          <div class="row"><strong>분석</strong><span>배정된 서비스 repo와 로그만 기준으로 봅니다.</span></div>
-          <div class="row"><strong>패치</strong><span>취약점은 막고 기본 기능은 유지합니다.</span></div>
-          <div class="row"><strong>제출</strong><span>공식 실행 기록이 붙은 commit만 인정됩니다.</span></div>
-        </div>
-        <div class="callout reveal">수동 push, 수동 패치, 경기 중 명세 변경은 방어 결과로 인정되지 않습니다.</div>
+        <ul class="list reveal">
+          <li>PoC는 공식 runner에서 실행</li>
+          <li>stdout 마지막 non-empty line에 현재 flag 출력</li>
+          <li>defense commit에는 Agent-Run-ID 필요</li>
+          <li>수동 PoC 제출과 수동 push는 무효</li>
+        </ul>
+        <table class="table reveal">
+          <thead>
+            <tr><th>이벤트</th><th>점수</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>PoC 성공</td><td>공격팀 +10</td></tr>
+            <tr><td>방어 중인 서비스가 뚫림</td><td>방어팀 -10</td></tr>
+            <tr><td>서비스 OK</td><td>서비스 소유팀 +10</td></tr>
+            <tr><td>서비스 DOWN/FAULTY</td><td>가용성 점수 없음</td></tr>
+          </tbody>
+        </table>
       </div>
-      <footer class="footer"><span>Defense path</span><span>07</span></footer>
+      <footer class="footer"><span>Attack and defense</span><span>07</span></footer>
     </section>
 
     <section class="slide" id="slide-8">
       <header>
-        <p class="kicker">점수</p>
-        <h2>공격, 방어, 가용성이 동시에 움직입니다.</h2>
+        <p class="kicker">공식 경로</p>
+        <h2>공식 기록이 없는 제출, 패치, 호출은 채점에서 제외됩니다.</h2>
       </header>
       <div class="body">
-        <div class="metric-grid reveal">
-          <div class="metric"><strong>1000</strong><span>시작 점수</span></div>
-          <div class="metric"><strong>+10</strong><span>PoC 성공 공격팀</span></div>
-          <div class="metric"><strong>-10</strong><span>뚫린 서비스의 방어팀</span></div>
-          <div class="metric"><strong>+10</strong><span>서비스 OK 소유팀</span></div>
-        </div>
-        <div class="callout good reveal">서비스 DOWN이면 가용성 보너스가 없습니다.</div>
-      </div>
-      <footer class="footer"><span>Scoring</span><span>08</span></footer>
-    </section>
-
-    <section class="slide" id="slide-9">
-      <header>
-        <p class="kicker">특별규칙</p>
-        <h2>내 서비스와 내가 방어하는 서비스는 다릅니다.</h2>
-      </header>
-      <div class="body split">
-        <div class="swap reveal">
-          <div class="team"><strong>team1</strong><span>team6 방어</span></div>
-          <div class="team"><strong>team2</strong><span>team1 방어</span></div>
-          <div class="team"><strong>team3</strong><span>team2 방어</span></div>
-          <div class="team"><strong>team4</strong><span>team3 방어</span></div>
-          <div class="team"><strong>team5</strong><span>team4 방어</span></div>
-          <div class="team"><strong>team6</strong><span>team5 방어</span></div>
-        </div>
-        <div class="callout reveal">예: team1 서비스가 뚫리면 team2가 방어 실패 감점을 받습니다.</div>
-      </div>
-      <footer class="footer"><span>Defense swap</span><span>09</span></footer>
-    </section>
-
-    <section class="slide" id="slide-10">
-      <header>
-        <p class="kicker">공격 대상 제한</p>
-        <h2>자기 서비스와 자기 방어 대상은 공격할 수 없습니다.</h2>
-      </header>
-      <div class="body split">
         <table class="table reveal">
           <thead>
-            <tr><th>공격팀</th><th>공격 금지</th><th>공격 가능</th></tr>
+            <tr><th>항목</th><th>기준</th></tr>
           </thead>
           <tbody>
-            <tr><td>team1</td><td>team1, team6</td><td>4개</td></tr>
-            <tr><td>team2</td><td>team2, team1</td><td>4개</td></tr>
-            <tr><td>team3</td><td>team3, team2</td><td>4개</td></tr>
-            <tr><td>team4</td><td>team4, team3</td><td>4개</td></tr>
-            <tr><td>team5</td><td>team5, team4</td><td>4개</td></tr>
-            <tr><td>team6</td><td>team6, team5</td><td>4개</td></tr>
+            <tr><td>수동 제출</td><td>라운드 중 사람이 직접 낸 PoC 또는 push는 인정되지 않습니다.</td></tr>
+            <tr><td>외부 AI</td><td>개인 API key와 외부 OpenRouter 직접 호출은 금지입니다.</td></tr>
+            <tr><td>운영 인프라</td><td>coordinator, gateway, runner, Docker host는 공격 대상이 아닙니다.</td></tr>
+            <tr><td>DoS</td><td>서비스를 고의로 다운시키는 트래픽과 리소스 고갈은 금지입니다.</td></tr>
+            <tr><td>비밀값</td><td>flag, 토큰, API key, 비밀키를 공유하거나 commit하지 않습니다.</td></tr>
+            <tr><td>최종 판정</td><td>coordinator의 실행 기록, wrapper 기록, runner 결과를 기준으로 합니다.</td></tr>
           </tbody>
         </table>
-        <div class="callout good reveal">대상 검증은 coordinator가 자동으로 막습니다.</div>
       </div>
-      <footer class="footer"><span>Allowed targets</span><span>10</span></footer>
-    </section>
-
-    <section class="slide" id="slide-11">
-      <header>
-        <p class="kicker">공식 경로</p>
-        <h2>점수 인정은 공식 실행 기록이 있는 결과만 됩니다.</h2>
-      </header>
-      <div class="body grid-4">
-        <article class="rule reveal">
-          <h3>공식 실행</h3>
-          <p>운영 서버가 시작한 agent 실행</p>
-        </article>
-        <article class="rule reveal">
-          <h3>공식 LLM 경로</h3>
-          <p>주입된 내부 경로만 사용</p>
-        </article>
-        <article class="rule reveal">
-          <h3>공식 공격 경로</h3>
-          <p>서비스 접근은 wrapper 기록 필수</p>
-        </article>
-        <article class="rule reveal">
-          <h3>공식 PoC 경로</h3>
-          <p>제출과 실행 기록이 있어야 인정</p>
-        </article>
-      </div>
-      <footer class="footer"><span>Official path</span><span>11</span></footer>
-    </section>
-
-    <section class="slide" id="slide-12">
-      <header>
-        <p class="kicker">부정행위 기준</p>
-        <h2>운영 인프라와 다른 팀 비밀값은 공격 대상이 아닙니다.</h2>
-      </header>
-      <div class="body grid-3">
-        <article class="rule reveal">
-          <h3>운영 인프라 공격 금지</h3>
-          <p>coordinator, gateway, runner, Docker host는 경기 대상이 아닙니다.</p>
-        </article>
-        <article class="rule reveal">
-          <h3>DoS 금지</h3>
-          <p>서비스를 고의로 다운시키는 트래픽과 리소스 고갈은 금지입니다.</p>
-        </article>
-        <article class="rule reveal">
-          <h3>인증값 탈취 금지</h3>
-          <p>다른 팀의 제출 권한, 방어 권한, 내부 비밀값 사용은 금지입니다.</p>
-        </article>
-        <article class="rule reveal">
-          <h3>repo 우회 접근 금지</h3>
-          <p>허용되지 않은 repo clone/fetch 시도는 금지입니다.</p>
-        </article>
-        <article class="rule reveal">
-          <h3>외부 공유 금지</h3>
-          <p>flag, exploit, PoC, 내부 비밀값을 외부로 공유하지 않습니다.</p>
-        </article>
-        <article class="rule reveal">
-          <h3>비밀값 commit 금지</h3>
-          <p>flag, API key, 비밀키 등은 git에 올리지 않습니다.</p>
-        </article>
-      </div>
-      <footer class="footer"><span>Fair play</span><span>12</span></footer>
-    </section>
-
-    <section class="slide" id="slide-13">
-      <header>
-        <p class="kicker">AI 사용 규칙</p>
-        <h2>공식 라운드에서는 허용 모델만 사용합니다.</h2>
-      </header>
-      <div class="body split">
-        <div class="chip-row reveal">
-          <span class="chip good">gpt-4o-mini</span>
-          <span class="chip good">gemini flash</span>
-          <span class="chip good">qwen 2.5 14b</span>
-          <span class="chip good">phi-4</span>
-          <span class="chip good">mistral small</span>
-          <span class="chip good">mimo</span>
-        </div>
-        <ul class="list reveal">
-          <li>외부 AI API 직접 호출 금지</li>
-          <li>개인 API key 사용 금지</li>
-          <li>목록 밖 모델은 서버가 거절</li>
-        </ul>
-      </div>
-      <footer class="footer"><span>AI rules</span><span>13</span></footer>
-    </section>
-
-    <section class="slide" id="slide-14">
-      <header>
-        <p class="kicker">무효 처리</p>
-        <h2>기술적으로 성공해도 공식 기록이 없으면 무효입니다.</h2>
-      </header>
-      <div class="body grid-2">
-        <article class="rule reveal">
-          <h3>수동 PoC 제출</h3>
-          <p>라운드 중 사람이 직접 낸 PoC는 공격 점수가 아닙니다.</p>
-        </article>
-        <article class="rule reveal">
-          <h3>수동 방어 push</h3>
-          <p>공식 실행 기록이 없는 패치는 방어 결과가 아닙니다.</p>
-        </article>
-        <article class="rule reveal">
-          <h3>잘못된 PoC 출력</h3>
-          <p>현재 flag가 마지막 줄에 없으면 실패입니다.</p>
-        </article>
-        <article class="rule reveal">
-          <h3>명세 변경</h3>
-          <p>경기 중 취약점 명세 변경은 거절됩니다.</p>
-        </article>
-      </div>
-      <footer class="footer"><span>Invalid results</span><span>14</span></footer>
-    </section>
-
-    <section class="slide" id="slide-15">
-      <header>
-        <p class="kicker">마지막 확인</p>
-        <h2>서비스는 소개하고, 공격과 방어는 agent에게 맡깁니다.</h2>
-      </header>
-      <div class="body split">
-        <ul class="list reveal">
-          <li><strong>서비스 발표</strong>: 기능 중심</li>
-          <li><strong>A&amp;D</strong>: 공식 agent만 인정</li>
-          <li><strong>스왑</strong>: 내가 방어하는 서비스 확인</li>
-          <li><strong>공정성</strong>: 공식 기록 없는 결과는 무효</li>
-        </ul>
-        <div class="terminal reveal">
-          <div class="terminal-bar"><span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span></div>
-          <pre>ready:
-  service: running
-  vuln_spec: locked
-  agent: official path
-
-start: 20:00 KST</pre>
-        </div>
-      </div>
-      <footer class="footer"><span>Close</span><span>15</span></footer>
+      <footer class="footer"><span>Official path</span><span>08</span></footer>
     </section>
   </main>
 

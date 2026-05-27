@@ -5,7 +5,7 @@ Checker 시스템 (FAUST CTF / iCTF 방식).
   1. 서비스 liveness 확인 (vuln_spec.service.health, 미지정 시 템플릿 호환용 /health)
   2. Flag 주입 (vuln_spec의 checker.inject 블록)
   3. Flag 회수 확인 (checker.retrieve 블록) — 서비스가 데이터 보존 중인지
-  4. 기본 기능 동작 확인 (checker.basic_function)
+  4. 취약점별 기본 기능 동작 확인 (checker.basic_function)
 
 상태:
   OK      → 모든 단계 통과. 가용성 보너스 + 공격 허용
@@ -40,7 +40,7 @@ class CheckResult:
     retrieve_ok: bool = False
     basic_func_ok: bool = False
     detail: str = ""
-    vuln_results: dict = field(default_factory=dict)  # {vuln_id: {inject, retrieve}}
+    vuln_results: dict = field(default_factory=dict)  # {vuln_id: {inject, retrieve, basic_function}}
 
 
 async def check_team(
@@ -80,11 +80,12 @@ async def check_team(
 
         # ── 2 & 3. vuln별 inject + retrieve ─────────────────────────
         all_vulns_ok = True
+        all_basic_ok = True
         for vuln in vulns:
             vuln_id = vuln["id"]
             flag = round_flags.get(vuln_id, "")
             checker_spec = vuln.get("checker", {})
-            vuln_r = {"inject": False, "retrieve": False}
+            vuln_r = {"inject": False, "retrieve": False, "basic_function": False}
 
             # inject
             inject_spec = checker_spec.get("inject")
@@ -109,21 +110,20 @@ async def check_team(
             else:
                 vuln_r["retrieve"] = True
 
+            # basic_function
+            basic_spec = checker_spec.get("basic_function")
+            if basic_spec:
+                basic_ok = await _do_basic_function(client, base_url, basic_spec)
+                vuln_r["basic_function"] = basic_ok
+                if not basic_ok:
+                    all_basic_ok = False
+                    result.detail += f" vuln {vuln_id}: basic_function 실패;"
+            else:
+                vuln_r["basic_function"] = True
+
             result.vuln_results[vuln_id] = vuln_r
 
-        # ── 4. 기본 기능 확인 ────────────────────────────────────────
-        basic_spec = None
-        for vuln in vulns:
-            if vuln.get("checker", {}).get("basic_function"):
-                basic_spec = vuln["checker"]["basic_function"]
-                break
-
-        if basic_spec:
-            result.basic_func_ok = await _do_basic_function(client, base_url, basic_spec)
-            if not result.basic_func_ok:
-                result.detail += " 기본 기능 실패;"
-        else:
-            result.basic_func_ok = True  # 스펙 없으면 생략
+        result.basic_func_ok = all_basic_ok
 
         # ── 최종 상태 결정 ───────────────────────────────────────────
         if all_vulns_ok and result.basic_func_ok:

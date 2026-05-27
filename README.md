@@ -31,7 +31,7 @@ curl http://localhost:42000/health
 
 | 주소 | 용도 |
 |---|---|
-| `http://localhost:42000` | CLI/API 게이트웨이: coordinator API + plain-text 안내 |
+| `http://localhost:42000` | 점수판 JSON. API는 `/health`, `/status`, `/scoreboard` 등 경로로 접근 |
 
 포트 할당:
 
@@ -106,8 +106,10 @@ python ../scripts/gitctf.py push
 2. 공격 에이전트가 target repo snapshot을 받습니다.
 3. 공격 에이전트가 `/attack`으로 live service를 탐색합니다.
 4. 공격 에이전트가 PoC 소스를 만들고 `/agent/pocs` wrapper 또는 `submit_poc_source()`로 제출합니다.
-5. coordinator가 제출된 PoC를 격리 runner에서 실행합니다.
-6. stdout 마지막 non-empty line이 현재 flag면 점수가 반영됩니다.
+5. coordinator는 제출된 PoC를 queued 상태로 저장합니다.
+6. 라운드 종료 시점에 팀 서비스 이미지를 scoring snapshot으로 고정합니다.
+7. snapshot에 현재 라운드 flag를 다시 주입한 뒤 제출된 PoC를 batch 실행합니다.
+8. stdout 마지막 non-empty line이 현재 flag면 점수가 반영됩니다.
 
 PoC runner 계약을 디버깅할 때만 아래처럼 직접 확인합니다.
 
@@ -116,9 +118,11 @@ python ../scripts/gitctf.py check --vuln 1 --poc poc.py
 ```
 
 attack/defense agent 준비와 로컬 디버그도 `scripts/gitctf.py` 안의 `agent` 명령만 사용하면 됩니다.
-agent 내부 오케스트레이션은 자유입니다. OpenAI/OpenRouter 호환 클라이언트는 주입된 `OPENAI_BASE_URL` 또는 `OPENROUTER_BASE_URL`을 쓰면 coordinator의 OpenRouter wrapper를 거칩니다.
-AI 모델 호출은 OpenRouter API 기반으로 동작하며, 실제 요청은 coordinator의 OpenRouter wrapper를 거칩니다.
+기본은 Python `attack_agent/main.py`, `defense_agent/main.py` 템플릿에서 시작하고, 내부 오케스트레이션은 자유롭게 바꾸면 됩니다.
+OpenAI/OpenRouter 호환 클라이언트는 주입된 `OPENAI_BASE_URL` 또는 `OPENROUTER_BASE_URL`을 쓰면 coordinator의 OpenRouter wrapper를 거칩니다.
+AI 모델 호출은 OpenRouter API 기반으로 동작하며, wrapper가 OpenRouter 호출과 모델 허용 여부를 검사합니다.
 <span class="red-strong">대회 당일에는 허용 모델 목록에 있는 모델만 사용할 수 있으며, 목록 밖 모델은 서버가 거절합니다.</span>
+처음 agent를 구현한다면 [OPENROUTER_AGENT_ENVIRONMENT.md](OPENROUTER_AGENT_ENVIRONMENT.md)의 환경변수와 예제 흐름을 먼저 확인합니다.
 내부 helper인 `scripts/agent.py`는 coordinator를 알 수 있으면 `/tools/agent.py` 최신 공식본을 확인한 뒤 실행합니다.
 공식 run 생성은 `RUNNER_SECRET`이 없으면 서버가 거부하며, raw git clone/fetch도 인증된 팀/방어팀만 가능합니다.
 runner는 `agent_manifest.json`의 `attack`/`defense` entrypoint를 실행하므로 코드 위치를 바꿔도 manifest만 맞추면 같은 runner에서 동작합니다.
@@ -133,7 +137,7 @@ runner는 `agent_manifest.json`의 `attack`/`defense` entrypoint를 실행하므
 | PoC 실패 | 변화 없음 |
 | 서비스 DOWN/FAULTY | 가용성 점수 없음 |
 
-같은 `(round, poc_id)`는 한 번만 점수화됩니다.
+PoC는 라운드당 `공격팀 -> 타겟팀 -> vuln_id` 기준 최대 2개 제출할 수 있고, 성공 점수는 같은 기준으로 1회만 인정됩니다.
 
 ## 주요 폴더
 
@@ -143,7 +147,6 @@ runner는 `agent_manifest.json`의 `attack`/`defense` entrypoint를 실행하므
 | `web_service/` | 참가자 서비스 예시 |
 | `attack_agent/` | 공격 에이전트 템플릿 |
 | `defense_agent/` | 방어 에이전트 템플릿 |
-| `agent_sdk/` | 호환용 에이전트 SDK |
 | `scripts/gitctf.py` | 참가자/관리자/agent 단일 CLI |
 | `scripts/agent.py` | `gitctf.py agent`가 호출하는 호환용 agent helper |
 | `tests/` | 핵심 흐름 테스트 |
@@ -154,6 +157,7 @@ runner는 `agent_manifest.json`의 `attack`/`defense` entrypoint를 실행하므
 |---|---|
 | [RULEBOOK.md](RULEBOOK.md) | 참가자 규칙 |
 | [AGENT_USAGE.txt](AGENT_USAGE.txt) | agent 빌드와 디버그 |
+| [OPENROUTER_AGENT_ENVIRONMENT.md](OPENROUTER_AGENT_ENVIRONMENT.md) | OpenRouter wrapper 기반 agent 구현 환경 |
 | [SCRIPT_USAGE.txt](SCRIPT_USAGE.txt) | 스크립트 빠른 사용법 |
 | [ORGANIZER_GUIDE.md](ORGANIZER_GUIDE.md) | 관리자 운영 |
 | [SERVER_AVAILABILITY_GUIDE.md](SERVER_AVAILABILITY_GUIDE.md) | 서버 가용성 점검과 요청 제한 |

@@ -22,7 +22,7 @@
 docker compose config --quiet
 docker compose up -d --build
 curl http://localhost:42000/health
-curl http://localhost:42000/
+open http://localhost:42000/
 ```
 
 정상이라면 coordinator는 다음처럼 응답합니다.
@@ -33,8 +33,8 @@ curl http://localhost:42000/
 
 CLI로 확인할 주소:
 
-- Coordinator API: `http://localhost:42000`
-- 점수 JSON: `http://localhost:42000/scoreboard`
+- 공개 점수판 웹사이트: `http://localhost:42000/`
+- 점수 JSON API: `http://localhost:42000/scoreboard`
 
 현재 `docker-compose.yml`에서 실제 팀 서비스 6개는 주석 처리되어 있습니다. 팀별 이미지가 준비된 뒤 `team1-service`부터 `team6-service`까지 주석을 해제해 운영 환경에 붙입니다.
 
@@ -78,7 +78,7 @@ python -m unittest discover -s tests -v
 | `python -m unittest discover -s tests -v` | 21개 테스트 통과 |
 | `docker compose config --quiet` | 통과 |
 | `curl http://localhost:42000/health` | `{"status":"ok","round":1,"round_active":false}` |
-| `curl -I http://localhost:42000/` | HTTP 200 |
+| 브라우저에서 `http://localhost:42000/` 접속 | A&D 시간표와 팀별 점수 현황 |
 | `python scripts/gitctf.py check --repo web_service --repeat 3` | `vuln1`~`vuln4` 전체 PASS |
 | `python scripts/gitctf.py check --repo web_service --vuln 1 --poc poc.py` | PoC runner 계약 검증 PASS |
 

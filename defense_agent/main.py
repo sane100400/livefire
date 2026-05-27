@@ -1,28 +1,190 @@
-"""Defense agent template using agent_sdk.
+"""
+Defense agent template.
 
-The template performs a full provenance-safe loop:
-  1. clone assigned target repo from coordinator git HTTP
-  2. ask the whitelisted LLM for a machine-applicable patch
-  3. apply the patch, commit with Agent-Run-ID trailer, and push
+Participants may replace everything in this file. The only required contract is
+to use the injected coordinator wrapper URLs and tokens, then push a patch
+commit that contains the current Agent-Run-ID.
 """
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
-from agent_sdk import AgentContext, AgentSDKError
+import httpx
 
 MODEL = os.getenv("MODEL", "openai/gpt-4o-mini")
 REPO_DIR = Path(os.getenv("REPO_DIR", "target_repo"))
 MAX_REPO_FILES = int(os.getenv("MAX_REPO_FILES", "28"))
 MAX_REPO_PROMPT_BYTES = int(os.getenv("MAX_REPO_PROMPT_BYTES", str(64 * 1024)))
 MAX_REPO_FILE_BYTES = int(os.getenv("MAX_REPO_FILE_BYTES", str(10 * 1024)))
-TEXT_SUFFIXES = {".py", ".js", ".ts", ".tsx", ".jsx", ".json", ".yaml", ".yml", ".toml", ".md", ".txt", ".html", ".css", ".sh"}
-IMPORTANT_NAMES = {"dockerfile", "requirements.txt", "pyproject.toml", "package.json", "vuln_spec.json", "app.py", "main.py", "server.py"}
+TEXT_SUFFIXES = {
+    ".py",
+    ".js",
+    ".ts",
+    ".tsx",
+    ".jsx",
+    ".json",
+    ".yaml",
+    ".yml",
+    ".toml",
+    ".md",
+    ".txt",
+    ".html",
+    ".css",
+    ".sh",
+}
+IMPORTANT_NAMES = {
+    "dockerfile",
+    "requirements.txt",
+    "pyproject.toml",
+    "package.json",
+    "vuln_spec.json",
+    "app.py",
+    "main.py",
+    "server.py",
+}
 SKIP_DIRS = {".git", "__pycache__", ".pytest_cache", ".mypy_cache", ".venv", "venv", "node_modules", "dist", "build"}
+
+
+@dataclass(frozen=True)
+class AgentEnv:
+    team_id: str
+    team_token: str
+    target_team: str
+    round_num: int
+    run_id: str
+    run_token: str
+    openrouter_base_url: str
+    agent_base_url: str
+    target_repo_url: str
+
+    @classmethod
+    def from_env(cls) -> "AgentEnv":
+        coordinator_url = os.environ["COORDINATOR_URL"].rstrip("/")
+        target_team = os.environ["TARGET_TEAM"]
+        return cls(
+            team_id=os.environ["TEAM_ID"],
+            team_token=os.environ["TEAM_TOKEN"],
+            target_team=target_team,
+            round_num=int(os.environ["ROUND"]),
+            run_id=os.environ["AGENT_RUN_ID"],
+            run_token=os.environ["AGENT_RUN_TOKEN"],
+            openrouter_base_url=os.environ["OPENROUTER_BASE_URL"].rstrip("/"),
+            agent_base_url=os.environ["HSPACE_AGENT_BASE_URL"].rstrip("/"),
+            target_repo_url=os.getenv("TARGET_REPO_URL") or f"{coordinator_url}/git/{target_team}",
+        )
+
+    @property
+    def auth(self) -> dict[str, str]:
+        return {"Authorization": f"Bearer {self.run_token}"}
+
+
+def _check_response(resp: httpx.Response, label: str) -> None:
+    if resp.status_code >= 400:
+        raise RuntimeError(f"{label} failed: HTTP {resp.status_code} {resp.text[:300]}")
+
+
+def call_llm(
+    env: AgentEnv,
+    *,
+    messages: list[dict[str, Any]],
+    max_tokens: int,
+    temperature: float = 0.2,
+) -> tuple[int, str]:
+    resp = httpx.post(
+        f"{env.openrouter_base_url}/chat/completions",
+        headers={**env.auth, "X-Agent-Purpose": "defense"},
+        json={
+            "model": MODEL,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        },
+        timeout=75.0,
+    )
+    _check_response(resp, "LLM wrapper")
+    data = resp.json()
+    llm_call_id = resp.headers.get("X-LLM-Call-ID") or (data.get("hspace") or {}).get("llm_call_id")
+    if not llm_call_id:
+        raise RuntimeError("LLM wrapper response did not include X-LLM-Call-ID")
+    choices = data.get("choices") or []
+    content = ((choices[0] if choices else {}).get("message") or {}).get("content") or ""
+    return int(llm_call_id), content
+
+
+def finish(env: AgentEnv, status: str, error: str = "") -> None:
+    try:
+        httpx.post(
+            f"{env.agent_base_url}/finish",
+            headers=env.auth,
+            json={"status": status, "error": error},
+            timeout=10.0,
+        )
+    except Exception as exc:
+        print(f"finish failed: {exc}")
+
+
+def _git_auth_header(env: AgentEnv) -> str:
+    raw = f"{env.team_id}:{env.team_token}".encode("utf-8")
+    return "Authorization: Basic " + base64.b64encode(raw).decode("ascii")
+
+
+def clone_target_repo(env: AgentEnv, dest: Path) -> dict[str, str]:
+    if dest.exists() and any(dest.iterdir()):
+        raise RuntimeError(f"destination is not empty: {dest}")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    result = subprocess.run(
+        [
+            "git",
+            "-c",
+            f"http.extraHeader={_git_auth_header(env)}",
+            "clone",
+            "--depth",
+            "1",
+            env.target_repo_url,
+            str(dest),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"git clone failed: {result.stderr[-500:]}")
+    commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=dest,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    return {"path": str(dest), "team": env.target_team, "commit": commit, "url": env.target_repo_url}
+
+
+def push_repo(env: AgentEnv, repo: Path, branch: str = "main") -> None:
+    result = subprocess.run(
+        ["git", "-c", f"http.extraHeader={_git_auth_header(env)}", "push", env.target_repo_url, f"HEAD:{branch}"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"git push failed: {result.stderr[-800:]}")
+
+
+def commit_patch(env: AgentEnv, repo: Path, message: str) -> str:
+    full_message = f"{message.rstrip()}\n\nAgent-Run-ID: {env.run_id}"
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    staged = subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=repo)
+    if staged.returncode == 0:
+        raise RuntimeError("no staged defense patch changes to commit")
+    subprocess.run(["git", "commit", "-m", full_message], cwd=repo, check=True)
+    result = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True)
+    return result.stdout.strip()
 
 
 def _json_from_text(text: str) -> dict:
@@ -88,7 +250,7 @@ def apply_llm_patch(repo: Path, data: dict) -> int:
     if isinstance(patch, str) and patch.strip():
         proc = subprocess.run(["git", "apply", "--whitespace=fix", "-"], cwd=repo, input=patch, text=True)
         if proc.returncode != 0:
-            raise AgentSDKError("git apply failed for LLM patch")
+            raise RuntimeError("git apply failed for LLM patch")
         changed += 1
 
     files = data.get("files", [])
@@ -118,14 +280,14 @@ def syntax_check(repo: Path) -> None:
 
 
 def main() -> None:
-    ctx = AgentContext.from_env()
-    print(f"[{ctx.team_id}] defense run {ctx.agent_run_id} target={ctx.target_team} round={ctx.round_num}")
+    env = AgentEnv.from_env()
+    print(f"[{env.team_id}] defense run {env.run_id} target={env.target_team} round={env.round_num}")
     try:
-        repo_info = ctx.clone_target_repo(REPO_DIR)
+        repo_info = clone_target_repo(env, REPO_DIR)
         repo = Path(repo_info["path"])
         context = load_repo_context(repo, repo_info["commit"])
-        resp = ctx.llm(
-            model=MODEL,
+        _, content = call_llm(
+            env,
             messages=[
                 {
                     "role": "system",
@@ -141,32 +303,29 @@ def main() -> None:
                     "role": "user",
                     "content": json.dumps(
                         {
-                            "target_team": ctx.target_team,
+                            "target_team": env.target_team,
                             "repo_commit": repo_info["commit"],
                             "repo_snapshot": context,
                         },
                         ensure_ascii=False,
                     ),
-                }
+                },
             ],
             max_tokens=4096,
-            purpose="defense",
         )
-        patch_data = _json_from_text(resp["content"])
+        patch_data = _json_from_text(content)
         changed = apply_llm_patch(repo, patch_data)
         if not changed:
-            raise AgentSDKError("defense LLM returned no applicable changes")
+            raise RuntimeError("defense LLM returned no applicable changes")
         syntax_check(repo)
-        summary = str(patch_data.get("summary") or f"defense patch for {ctx.target_team}")[:120]
-        commit = ctx.commit_patch(summary, repo_dir=repo)
-        ctx.push_repo(repo_dir=repo, repo_team=ctx.target_team)
+        summary = str(patch_data.get("summary") or f"defense patch for {env.target_team}")[:120]
+        commit = commit_patch(env, repo, summary)
+        push_repo(env, repo)
         print(f"  pushed defense commit {commit[:12]}")
-        ctx.finish("completed")
+        finish(env, "completed")
     except Exception as exc:
-        try:
-            ctx.finish("failed", str(exc))
-        finally:
-            raise
+        finish(env, "failed", str(exc))
+        raise
 
 
 if __name__ == "__main__":

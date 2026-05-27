@@ -88,11 +88,19 @@ OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/ap
 # ── PoC 저장/실행 ───────────────────────────────────────────────────
 DATA_DIR = os.getenv("DATA_DIR", os.path.join(os.path.dirname(__file__), "..", "data"))
 POC_TIMEOUT_SEC = int(os.getenv("POC_TIMEOUT_SEC", "20"))
+POC_MAX_TIMEOUT_SEC = int(os.getenv("POC_MAX_TIMEOUT_SEC", "120"))
 POC_MAX_BYTES = int(os.getenv("POC_MAX_BYTES", str(64 * 1024)))
 POC_OUTPUT_MAX_BYTES = int(os.getenv("POC_OUTPUT_MAX_BYTES", str(64 * 1024)))
+MAX_POCS_PER_VULN_ROUND = int(os.getenv("MAX_POCS_PER_VULN_ROUND", "2"))
 POC_RUNNER_MODE = os.getenv("POC_RUNNER_MODE", "auto")  # auto / docker / local
 POC_DOCKER_NETWORK = os.getenv("POC_DOCKER_NETWORK", "hackathon_target-net")
 POC_DOCKER_IMAGE = os.getenv("POC_DOCKER_IMAGE", "python:3.11-slim")
+SCORING_SNAPSHOT_ENABLED = _env_bool("SCORING_SNAPSHOT_ENABLED", "1")
+SCORING_SNAPSHOT_NETWORK = os.getenv("SCORING_SNAPSHOT_NETWORK", POC_DOCKER_NETWORK)
+SCORING_SNAPSHOT_IP_PREFIX = os.getenv("SCORING_SNAPSHOT_IP_PREFIX", "10.89.21.")
+SCORING_SNAPSHOT_IP_START = int(os.getenv("SCORING_SNAPSHOT_IP_START", "110"))
+SCORING_SNAPSHOT_STARTUP_GRACE_SEC = float(os.getenv("SCORING_SNAPSHOT_STARTUP_GRACE_SEC", "3"))
+SCORING_SNAPSHOT_KEEP_CONTAINERS = _env_bool("SCORING_SNAPSHOT_KEEP_CONTAINERS", "0")
 # Docker socket 사용 시 host daemon은 컨테이너 내부 DATA_DIR 경로를 모른다.
 # docker-compose는 이 값을 host의 ./data 절대경로로 넘긴다.
 POC_HOST_DATA_DIR = os.getenv("POC_HOST_DATA_DIR", "")

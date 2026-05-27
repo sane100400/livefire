@@ -1,17 +1,22 @@
 """
-Attack agent template using the compatibility agent_sdk path.
+Attack agent template.
 
-Participants may replace this with any orchestration they want. Official runs
-must still use the coordinator-provided LLM wrapper and agent PoC/attack APIs.
+Participants may replace everything in this file. The only required contract is
+to call the coordinator-provided wrapper APIs with the injected environment
+variables. Do not call external AI providers or target services directly.
 """
 from __future__ import annotations
 
+import io
 import json
 import os
 import re
+import tarfile
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
-from agent_sdk import AgentContext, AgentSDKError
+import httpx
 
 MODEL = os.getenv("MODEL", "openai/gpt-4o-mini")
 MAX_REPO_FILES = int(os.getenv("MAX_REPO_FILES", "24"))
@@ -56,6 +61,136 @@ SKIP_DIRS = {
     "dist",
     "build",
 }
+
+
+@dataclass(frozen=True)
+class AgentEnv:
+    team_id: str
+    target_team: str
+    round_num: int
+    run_id: str
+    run_token: str
+    openrouter_base_url: str
+    agent_base_url: str
+
+    @classmethod
+    def from_env(cls) -> "AgentEnv":
+        return cls(
+            team_id=os.environ["TEAM_ID"],
+            target_team=os.environ["TARGET_TEAM"],
+            round_num=int(os.environ["ROUND"]),
+            run_id=os.environ["AGENT_RUN_ID"],
+            run_token=os.environ["AGENT_RUN_TOKEN"],
+            openrouter_base_url=os.environ["OPENROUTER_BASE_URL"].rstrip("/"),
+            agent_base_url=os.environ["HSPACE_AGENT_BASE_URL"].rstrip("/"),
+        )
+
+    @property
+    def auth(self) -> dict[str, str]:
+        return {"Authorization": f"Bearer {self.run_token}"}
+
+
+def _check_response(resp: httpx.Response, label: str) -> None:
+    if resp.status_code >= 400:
+        raise RuntimeError(f"{label} failed: HTTP {resp.status_code} {resp.text[:300]}")
+
+
+def call_llm(
+    env: AgentEnv,
+    *,
+    purpose: str,
+    messages: list[dict[str, Any]],
+    max_tokens: int,
+    temperature: float = 0.2,
+) -> tuple[int, str]:
+    resp = httpx.post(
+        f"{env.openrouter_base_url}/chat/completions",
+        headers={**env.auth, "X-Agent-Purpose": purpose},
+        json={
+            "model": MODEL,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        },
+        timeout=75.0,
+    )
+    _check_response(resp, "LLM wrapper")
+    data = resp.json()
+    llm_call_id = resp.headers.get("X-LLM-Call-ID") or (data.get("hspace") or {}).get("llm_call_id")
+    if not llm_call_id:
+        raise RuntimeError("LLM wrapper response did not include X-LLM-Call-ID")
+    choices = data.get("choices") or []
+    content = ((choices[0] if choices else {}).get("message") or {}).get("content") or ""
+    return int(llm_call_id), content
+
+
+def finish(env: AgentEnv, status: str, error: str = "") -> None:
+    try:
+        httpx.post(
+            f"{env.agent_base_url}/finish",
+            headers=env.auth,
+            json={"status": status, "error": error},
+            timeout=10.0,
+        )
+    except Exception as exc:
+        print(f"finish failed: {exc}")
+
+
+def fetch_target_repo(env: AgentEnv, dest: str | Path = "target_repo") -> dict[str, str]:
+    resp = httpx.get(f"{env.agent_base_url}/target-repo.tar", headers=env.auth, timeout=30.0)
+    _check_response(resp, "target repo fetch")
+
+    repo_team = resp.headers.get("X-Repo-Team") or env.target_team
+    commit = resp.headers.get("X-Repo-Commit") or ""
+    dest_root = (Path(dest) / env.run_id).resolve()
+    dest_root.mkdir(parents=True, exist_ok=True)
+
+    with tarfile.open(fileobj=io.BytesIO(resp.content), mode="r:*") as archive:
+        for member in archive.getmembers():
+            member_path = (dest_root / member.name).resolve()
+            member_path.relative_to(dest_root)
+            if member.isdir():
+                member_path.mkdir(parents=True, exist_ok=True)
+                continue
+            if not member.isfile():
+                continue
+            member_path.parent.mkdir(parents=True, exist_ok=True)
+            extracted = archive.extractfile(member)
+            if extracted is not None:
+                member_path.write_bytes(extracted.read())
+
+    return {"path": str(dest_root / repo_team), "team": repo_team, "commit": commit}
+
+
+def attack_target(env: AgentEnv, probe: dict, llm_call_id: int) -> dict:
+    resp = httpx.post(
+        f"{env.agent_base_url}/attack",
+        headers=env.auth,
+        json={
+            "llm_call_id": llm_call_id,
+            "payload": probe.get("payload") or "",
+            "path": probe.get("path"),
+            "method": probe.get("method") or "POST",
+            "json_body": probe.get("json_body"),
+            "query": probe.get("query"),
+            "headers": probe.get("headers"),
+            "data": probe.get("data"),
+        },
+        timeout=40.0,
+    )
+    _check_response(resp, "attack wrapper")
+    return resp.json()
+
+
+def submit_poc(env: AgentEnv, *, flag_id: str, llm_call_id: int, source: str) -> dict:
+    resp = httpx.post(
+        f"{env.agent_base_url}/pocs",
+        headers=env.auth,
+        data={"flag_id": flag_id, "llm_call_id": str(llm_call_id), "source": source},
+        timeout=30.0,
+    )
+    _check_response(resp, "PoC submit wrapper")
+    return resp.json()
 
 
 def _json_from_text(text: str) -> object:
@@ -115,8 +250,8 @@ def _repo_file_priority(path: Path) -> tuple[int, str]:
     return rank, str(path)
 
 
-def load_target_repo_context(ctx: AgentContext) -> tuple[dict, str]:
-    info = ctx.fetch_target_repo()
+def load_target_repo_context(env: AgentEnv) -> tuple[dict, str]:
+    info = fetch_target_repo(env)
     root = Path(info["path"])
     if not root.exists():
         raise RuntimeError(f"target repo snapshot missing: {root}")
@@ -163,9 +298,10 @@ def load_target_repo_context(ctx: AgentContext) -> tuple[dict, str]:
     return info, "".join(chunks)
 
 
-def plan_scan(ctx: AgentContext, repo_info: dict, repo_context: str) -> tuple[int, list[dict]]:
-    resp = ctx.llm(
-        model=MODEL,
+def plan_scan(env: AgentEnv, repo_info: dict, repo_context: str) -> tuple[int, list[dict]]:
+    llm_call_id, content = call_llm(
+        env,
+        purpose="scan",
         messages=[
             {
                 "role": "system",
@@ -181,7 +317,7 @@ def plan_scan(ctx: AgentContext, repo_info: dict, repo_context: str) -> tuple[in
                 "role": "user",
                 "content": json.dumps(
                     {
-                        "target_team": ctx.target_team,
+                        "target_team": env.target_team,
                         "repo_commit": repo_info.get("commit"),
                         "known_possible_vuln_ids": ["vuln1", "vuln2", "vuln3", "vuln4"],
                         "required_output_shape": {
@@ -202,21 +338,21 @@ def plan_scan(ctx: AgentContext, repo_info: dict, repo_context: str) -> tuple[in
             },
         ],
         max_tokens=700,
-        purpose="scan",
     )
-    return int(resp["llm_call_id"]), _parse_scan_plan(resp["content"])
+    return llm_call_id, _parse_scan_plan(content)
 
 
 def build_poc(
-    ctx: AgentContext,
+    env: AgentEnv,
     flag_id: str,
     probe: dict,
     observation: dict,
     repo_info: dict,
     repo_context: str,
 ) -> tuple[int, str]:
-    resp = ctx.llm(
-        model=MODEL,
+    llm_call_id, content = call_llm(
+        env,
+        purpose="poc",
         messages=[
             {
                 "role": "system",
@@ -232,7 +368,7 @@ def build_poc(
                 "role": "user",
                 "content": json.dumps(
                     {
-                        "target_team": ctx.target_team,
+                        "target_team": env.target_team,
                         "repo_commit": repo_info.get("commit"),
                         "flag_id": flag_id,
                         "successful_probe": probe,
@@ -247,60 +383,42 @@ def build_poc(
             },
         ],
         max_tokens=1200,
-        purpose="poc",
     )
-    source = resp["content"].strip()
+    source = content.strip()
     match = re.search(r"```(?:python)?\s*(.*?)```", source, flags=re.S)
     if match:
         source = match.group(1).strip()
-    compile(source, f"poc_{ctx.target_team}_{flag_id}.py", "exec")
-    return int(resp["llm_call_id"]), source + "\n"
+    compile(source, f"poc_{env.target_team}_{flag_id}.py", "exec")
+    return llm_call_id, source + "\n"
 
 
 def main() -> None:
-    ctx = AgentContext.from_env()
-    print(f"[{ctx.team_id}] attack run {ctx.agent_run_id} target={ctx.target_team} round={ctx.round_num}")
+    env = AgentEnv.from_env()
+    print(f"[{env.team_id}] attack run {env.run_id} target={env.target_team} round={env.round_num}")
     try:
-        repo_info, repo_context = load_target_repo_context(ctx)
+        repo_info, repo_context = load_target_repo_context(env)
         print(f"  repo {repo_info.get('team')}@{str(repo_info.get('commit', ''))[:12]} loaded")
-        scan_llm_call_id, probes = plan_scan(ctx, repo_info, repo_context)
+        scan_llm_call_id, probes = plan_scan(env, repo_info, repo_context)
 
         for item in probes:
             flag_id = item["flag_id"]
-            payload = item["payload"]
             try:
-                result = ctx.attack(
-                    payload,
-                    llm_call_id=scan_llm_call_id,
-                    path=item.get("path"),
-                    method=item.get("method") or "POST",
-                    json_body=item.get("json_body"),
-                    query=item.get("query"),
-                    headers=item.get("headers"),
-                    data=item.get("data"),
-                )
+                result = attack_target(env, item, scan_llm_call_id)
                 flags_found = result.get("flags_found", [])
                 print(f"  probe {flag_id}: flags={len(flags_found)} turns={result.get('turns_remaining')}")
                 if not flags_found:
                     continue
 
-                poc_llm_call_id, source = build_poc(ctx, flag_id, item, result, repo_info, repo_context)
-                submitted = ctx.submit_poc_source(
-                    source,
-                    llm_call_id=poc_llm_call_id,
-                    flag_id=flag_id,
-                    file_name="poc.py",
-                )
+                poc_llm_call_id, source = build_poc(env, flag_id, item, result, repo_info, repo_context)
+                submitted = submit_poc(env, flag_id=flag_id, llm_call_id=poc_llm_call_id, source=source)
                 print(f"  submitted agent-generated poc.py for {flag_id}: {submitted}")
-            except (AgentSDKError, ValueError, SyntaxError) as exc:
+            except (RuntimeError, ValueError, SyntaxError) as exc:
                 print(f"  probe {flag_id} failed: {exc}")
 
-        ctx.finish("completed")
+        finish(env, "completed")
     except Exception as exc:
-        try:
-            ctx.finish("failed", str(exc))
-        finally:
-            raise
+        finish(env, "failed", str(exc))
+        raise
 
 
 if __name__ == "__main__":

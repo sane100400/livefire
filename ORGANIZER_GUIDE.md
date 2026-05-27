@@ -259,7 +259,10 @@ python scripts/gitctf.py admin round start
 ### 5-3. 실시간 모니터링
 
 ```bash
-# 점수 JSON API (10초 갱신)
+# 공개 점수판 웹사이트
+브라우저에서 http://localhost:42000/ 접속
+
+# 점수 JSON API
 watch -n 10 'curl -s http://localhost:42000/scoreboard | python3 -m json.tool'
 
 # 라운드 로그
@@ -269,7 +272,7 @@ tail -f /tmp/and_round.log
 curl "http://localhost:42000/admin/audit-log?attacker=team1" \
   -H "X-Admin-Secret: $ADMIN_SECRET" | python3 -m json.tool
 
-# 전체 운영은 CLI/API 기준으로 진행한다. 별도 그래픽 점수판은 운영하지 않는다.
+# 공개 점수판은 :42000/에서 제공하고, 운영 명령은 CLI/API 기준으로 진행한다.
 ```
 
 ### 5-4. 팀 서비스 패치 처리

@@ -9,6 +9,7 @@ import tempfile
 import textwrap
 import threading
 import unittest
+from types import SimpleNamespace
 from contextlib import redirect_stdout
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -181,6 +182,183 @@ class CoreFlowTests(unittest.TestCase):
             self.assertEqual(result[0]["scored"], 0)
             self.assertIn("final non-empty stdout line", result[0]["detail"])
 
+    def test_poc_runner_only_runs_pocs_submitted_for_that_round(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            reset_db(root / "game.db")
+            db.set_service_status("team2", "OK")
+            flag = "HSPACE{aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}"
+            db.upsert_flag(2, "team2", "vuln1", flag)
+            run1 = db.create_agent_run("run-old", "team1", "attack", "team2", 1)
+            run2 = db.create_agent_run("run-new", "team1", "attack", "team2", 2)
+            old_path = root / "poc_old.py"
+            new_path = root / "poc_new.py"
+            old_path.write_text("print('old')\n", encoding="utf-8")
+            new_path.write_text(f"print('{flag}')\n", encoding="utf-8")
+            db.create_poc_submission(
+                poc_id="poc-old",
+                agent_run_id=run1["id"],
+                llm_call_id=1,
+                attacker_team="team1",
+                target_team="team2",
+                defender_team="team3",
+                flag_id="vuln1",
+                submitted_round=1,
+                file_name=old_path.name,
+                sha256="old-sha",
+                storage_path=str(old_path),
+            )
+            db.create_poc_submission(
+                poc_id="poc-new",
+                agent_run_id=run2["id"],
+                llm_call_id=2,
+                attacker_team="team1",
+                target_team="team2",
+                defender_team="team3",
+                flag_id="vuln1",
+                submitted_round=2,
+                file_name=new_path.name,
+                sha256="new-sha",
+                storage_path=str(new_path),
+            )
+
+            result = poc_runner.run_pocs_for_round(
+                round_num=2,
+                teams={"team2": {"ip": "127.0.0.1", "port": 8000, "name": "Team 2"}},
+                data_dir=str(root / "data"),
+                timeout_sec=5,
+                output_max_bytes=4096,
+                attack_reward=10,
+                attack_penalty=10,
+                runner_mode="local",
+            )
+
+            self.assertEqual([row["poc_id"] for row in result], ["poc-new"])
+            self.assertIsNone(db.get_poc_result(2, "poc-old"))
+            self.assertEqual(result[0]["status"], "success")
+
+    def test_poc_runner_scores_only_once_per_vuln_per_round(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            reset_db(root / "game.db")
+            db.set_service_status("team2", "OK")
+            flag = "HSPACE{bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb}"
+            db.upsert_flag(1, "team2", "vuln1", flag)
+            run = db.create_agent_run("run-once-vuln", "team1", "attack", "team2", 1)
+            for idx in range(2):
+                path = root / f"poc_success_{idx}.py"
+                path.write_text(f"print('{flag}')\n", encoding="utf-8")
+                db.create_poc_submission(
+                    poc_id=f"poc-success-{idx}",
+                    agent_run_id=run["id"],
+                    llm_call_id=idx + 1,
+                    attacker_team="team1",
+                    target_team="team2",
+                    defender_team="team3",
+                    flag_id="vuln1",
+                    submitted_round=1,
+                    file_name=path.name,
+                    sha256=f"sha-{idx}",
+                    storage_path=str(path),
+                )
+
+            result = poc_runner.run_pocs_for_round(
+                round_num=1,
+                teams={"team2": {"ip": "127.0.0.1", "port": 8000, "name": "Team 2"}},
+                data_dir=str(root / "data"),
+                timeout_sec=5,
+                output_max_bytes=4096,
+                attack_reward=10,
+                attack_penalty=10,
+                runner_mode="local",
+            )
+
+            self.assertEqual(result[0]["status"], "success")
+            self.assertEqual(result[0]["scored"], 1)
+            self.assertEqual(result[1]["status"], "skipped_already_scored")
+            self.assertEqual(result[1]["scored"], 0)
+            scores = db.get_all_scores()
+            self.assertEqual(scores["team1"]["score"], 1010)
+            self.assertEqual(scores["team3"]["score"], 990)
+
+    def test_poc_submission_limited_to_two_per_vuln_per_round(self):
+        import app as coordinator_app
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            reset_db(root / "game.db")
+            coordinator_app.state.start_round(1)
+            run = db.create_agent_run("run-quota", "team1", "attack", "team2", 1)
+            llm_id = db.append_llm_call(
+                agent_run_id=run["id"],
+                model="openai/gpt-4o-mini",
+                allowed=True,
+                prompt_hash="prompt",
+                response_hash="response",
+                purpose="poc",
+                status="completed",
+            )
+
+            old_data_dir = coordinator_app.DATA_DIR
+            old_run_pocs = coordinator_app._run_pocs
+            coordinator_app.DATA_DIR = str(root / "data")
+            coordinator_app._run_pocs = lambda round_num, only_poc_id=None: []
+            try:
+                for idx in range(2):
+                    result = coordinator_app._submit_poc_content(
+                        run=run,
+                        llm_call={"id": llm_id},
+                        attacker_team="team1",
+                        target_team="team2",
+                        flag_id="vuln1",
+                        file_name=f"poc{idx}.py",
+                        content=f"print('attempt {idx}')\n".encode(),
+                    )
+                    self.assertEqual(result["status"], "submitted")
+
+                with self.assertRaises(coordinator_app.HTTPException) as ctx:
+                    coordinator_app._submit_poc_content(
+                        run=run,
+                        llm_call={"id": llm_id},
+                        attacker_team="team1",
+                        target_team="team2",
+                        flag_id="vuln1",
+                        file_name="poc2.py",
+                        content=b"print('attempt 2')\n",
+                    )
+
+                self.assertEqual(ctx.exception.status_code, 429)
+                self.assertIn("최대 2개", ctx.exception.detail)
+                self.assertEqual(
+                    db.count_active_poc_submissions_for_vuln("team1", "team2", "vuln1", 1),
+                    2,
+                )
+            finally:
+                coordinator_app.DATA_DIR = old_data_dir
+                coordinator_app._run_pocs = old_run_pocs
+
+    def test_poc_timeout_overrides_are_capped_per_vuln(self):
+        import app as coordinator_app
+
+        old_max = coordinator_app.POC_MAX_TIMEOUT_SEC
+        coordinator_app.POC_MAX_TIMEOUT_SEC = 120
+        try:
+            overrides = coordinator_app._poc_timeout_overrides({
+                "team2": {
+                    "vulnerabilities": [
+                        {"id": "vuln1", "poc_timeout_sec": 60},
+                        {"id": "vuln2", "checker": {"poc_timeout_sec": 999}},
+                        {"id": "vuln3", "poc_timeout_sec": "bad"},
+                    ],
+                }
+            })
+        finally:
+            coordinator_app.POC_MAX_TIMEOUT_SEC = old_max
+
+        self.assertEqual(overrides["team2"]["vuln1"], 60)
+        self.assertEqual(overrides["team2"]["vuln2"], 120)
+        self.assertNotIn("vuln3", overrides["team2"])
+
     def test_round_score_report_separates_availability_from_poc_deltas(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -309,6 +487,160 @@ class CoreFlowTests(unittest.TestCase):
                 availability_bonus=10,
             )
             self.assertEqual(score["availability_score_changes"]["team1"], 0)
+
+    def test_checker_runs_basic_function_for_each_vulnerability(self):
+        stored: dict[str, str] = {}
+
+        class Handler(BaseHTTPRequestHandler):
+            def _json(self, code: int, body: dict) -> None:
+                raw = json.dumps(body).encode()
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+
+            def do_GET(self):
+                if self.path == "/health":
+                    return self._json(200, {"ok": True})
+                if self.path == "/admin/check":
+                    return self._json(200, {"stored": list(stored.values())})
+                if self.path == "/basic/v1":
+                    return self._json(200, {"response": "vuln1 basic ok"})
+                if self.path == "/basic/v2":
+                    return self._json(404, {"error": "removed"})
+                return self._json(404, {"error": "not found"})
+
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length", "0"))
+                raw = self.rfile.read(length)
+                if self.path == "/admin/inject":
+                    body = json.loads(raw.decode() or "{}")
+                    stored[body["vuln_id"]] = body["value"]
+                    return self._json(200, {"ok": True})
+                return self._json(404, {"error": "not found"})
+
+            def log_message(self, *args):
+                pass
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            reset_db(root / "game.db")
+            flags = {
+                "vuln1": "HSPACE{11111111111111111111111111111111}",
+                "vuln2": "HSPACE{22222222222222222222222222222222}",
+            }
+            spec = {
+                "team_id": "team1",
+                "service": {"health": {"endpoint": "/health", "method": "GET", "expect_status": 200}},
+                "vulnerabilities": [
+                    {
+                        "id": "vuln1",
+                        "checker": {
+                            "inject": {"endpoint": "/admin/inject", "method": "POST", "body": {"vuln_id": "vuln1", "value": "{{FLAG}}"}},
+                            "retrieve": {"endpoint": "/admin/check", "method": "GET", "expect_contains": "{{FLAG}}"},
+                            "basic_function": {"endpoint": "/basic/v1", "method": "GET", "expect_status": 200},
+                        },
+                    },
+                    {
+                        "id": "vuln2",
+                        "checker": {
+                            "inject": {"endpoint": "/admin/inject", "method": "POST", "body": {"vuln_id": "vuln2", "value": "{{FLAG}}"}},
+                            "retrieve": {"endpoint": "/admin/check", "method": "GET", "expect_contains": "{{FLAG}}"},
+                            "basic_function": {"endpoint": "/basic/v2", "method": "GET", "expect_status": 200},
+                        },
+                    },
+                ],
+            }
+
+            server = HTTPServer(("127.0.0.1", 0), Handler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                results = asyncio.run(checker.run_all_checkers(
+                    {"team1": {"ip": "127.0.0.1", "port": server.server_port}},
+                    {"team1": spec},
+                    {"team1": flags},
+                    "checker-token",
+                ))
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
+
+            result = results["team1"]
+            self.assertEqual(result.status, "FAULTY")
+            self.assertFalse(result.basic_func_ok)
+            self.assertTrue(result.vuln_results["vuln1"]["basic_function"])
+            self.assertFalse(result.vuln_results["vuln2"]["basic_function"])
+            self.assertEqual(db.get_service_statuses()["team1"], "FAULTY")
+
+    def test_end_round_scores_against_scoring_snapshot(self):
+        import app as coordinator_app
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            reset_db(root / "game.db")
+            coordinator_app.state.start_round(1)
+            calls: list[tuple[str, object]] = []
+            snapshot_teams = {
+                team_id: {**info, "ip": f"10.89.21.{110 + idx}"}
+                for idx, (team_id, info) in enumerate(coordinator_app.TEAMS.items())
+            }
+
+            def fake_snapshot(**kwargs):
+                calls.append(("snapshot", kwargs["round_num"]))
+                return SimpleNamespace(
+                    teams=snapshot_teams,
+                    image_tags={team_id: f"and-service-{team_id}:round1-snapshot" for team_id in snapshot_teams},
+                    containers=[],
+                )
+
+            async def fake_checkers(teams, vuln_specs, round_flags_by_team, checker_token):
+                calls.append(("checker", teams))
+                for team_id in teams:
+                    db.set_service_status(team_id, "OK")
+                return {
+                    team_id: SimpleNamespace(health_ok=True, status="OK")
+                    for team_id in teams
+                }
+
+            def fake_run_pocs(round_num, only_poc_id=None, teams_override=None):
+                calls.append(("pocs", teams_override))
+                return [{"status": "success"}]
+
+            old_snapshot = coordinator_app.create_round_snapshot
+            old_cleanup = coordinator_app.cleanup_round_snapshot
+            old_checkers = coordinator_app.chk.run_all_checkers
+            old_run_pocs = coordinator_app._run_pocs
+            old_stop_agents = coordinator_app.stop_round_agents
+            old_grace = coordinator_app.SCORING_SNAPSHOT_STARTUP_GRACE_SEC
+            cleanup_calls: list[object] = []
+            coordinator_app.create_round_snapshot = fake_snapshot
+            coordinator_app.cleanup_round_snapshot = lambda snapshot: cleanup_calls.append(snapshot)
+            coordinator_app.chk.run_all_checkers = fake_checkers
+            coordinator_app._run_pocs = fake_run_pocs
+            coordinator_app.stop_round_agents = lambda round_num: calls.append(("stop", round_num))
+            coordinator_app.SCORING_SNAPSHOT_STARTUP_GRACE_SEC = 0
+            try:
+                result = asyncio.run(coordinator_app.end_round(x_admin_secret="test-admin"))
+            finally:
+                coordinator_app.create_round_snapshot = old_snapshot
+                coordinator_app.cleanup_round_snapshot = old_cleanup
+                coordinator_app.chk.run_all_checkers = old_checkers
+                coordinator_app._run_pocs = old_run_pocs
+                coordinator_app.stop_round_agents = old_stop_agents
+                coordinator_app.SCORING_SNAPSHOT_STARTUP_GRACE_SEC = old_grace
+
+            self.assertFalse(coordinator_app.state.round_active)
+            self.assertEqual(result["pocs_run"], 1)
+            self.assertTrue(result["scoring_snapshot"]["enabled"])
+            self.assertEqual(calls[0], ("stop", 1))
+            self.assertEqual(calls[1], ("snapshot", 1))
+            self.assertEqual(calls[2][0], "checker")
+            self.assertEqual(calls[2][1], snapshot_teams)
+            self.assertEqual(calls[3], ("pocs", snapshot_teams))
+            self.assertEqual(len(cleanup_calls), 1)
 
 
 class SpecDrivenServiceTests(unittest.TestCase):
@@ -608,8 +940,13 @@ class AgentOrchestrationPolicyTests(unittest.TestCase):
     def test_agent_templates_use_coordinator_llm_gateway(self):
         for relative in ["attack_agent/main.py", "defense_agent/main.py"]:
             source = (ROOT / relative).read_text(encoding="utf-8")
-            self.assertIn("ctx.llm(", source, relative)
-            self.assertNotIn("OPENROUTER_API_KEY", source, relative)
+            self.assertIn("OPENROUTER_BASE_URL", source, relative)
+            self.assertIn("AGENT_RUN_TOKEN", source, relative)
+            self.assertIn("HSPACE_AGENT_BASE_URL", source, relative)
+            self.assertIn("/chat/completions", source, relative)
+            self.assertIn("/finish", source, relative)
+            self.assertNotIn("AgentContext", source, relative)
+            self.assertNotIn("agent_sdk", source, relative)
             for forbidden in [
                 "openrouter.ai",
                 "api.openai.com",
@@ -617,7 +954,9 @@ class AgentOrchestrationPolicyTests(unittest.TestCase):
                 "generativelanguage.googleapis.com",
             ]:
                 self.assertNotIn(forbidden, source.lower(), relative)
-            self.assertNotIn("/chat/completions", source, relative)
+        attack_source = (ROOT / "attack_agent/main.py").read_text(encoding="utf-8")
+        self.assertIn("/attack", attack_source)
+        self.assertIn("/pocs", attack_source)
 
     def test_unified_agent_helper_has_trusted_bootstrap_marker(self):
         source = (ROOT / "scripts" / "agent.py").read_text(encoding="utf-8")
@@ -678,7 +1017,7 @@ class AgentOrchestrationPolicyTests(unittest.TestCase):
             self.assertNotIn("teamG\t", tokens_text)
 
     def test_user_docs_point_to_single_cli_for_agent_work(self):
-        for relative in ["README.md", "SCRIPT_USAGE.txt", "AGENT_USAGE.txt"]:
+        for relative in ["README.md", "SCRIPT_USAGE.txt", "AGENT_USAGE.txt", "OPENROUTER_AGENT_ENVIRONMENT.md"]:
             source = (ROOT / relative).read_text(encoding="utf-8")
             self.assertIn("gitctf.py agent", source, relative)
             self.assertNotIn("python scripts/agent.py", source, relative)
@@ -690,12 +1029,33 @@ class AgentOrchestrationPolicyTests(unittest.TestCase):
         self.assertIn("/agent/attack", agent_usage)
         self.assertIn("/agent/pocs", agent_usage)
         self.assertIn("허용 모델", agent_usage)
+        self.assertIn("하면 안 되는 것", agent_usage)
+        self.assertIn("Python main.py 템플릿", agent_usage)
+        self.assertNotIn("AgentContext", agent_usage)
+        self.assertNotIn("SDK", agent_usage)
+        openrouter_guide = (ROOT / "OPENROUTER_AGENT_ENVIRONMENT.md").read_text(encoding="utf-8")
+        self.assertIn("OPENROUTER_BASE_URL", openrouter_guide)
+        self.assertIn("OPENROUTER_API_KEY", openrouter_guide)
+        self.assertIn("openai/gpt-5.5", openrouter_guide)
+        self.assertIn("/agent/attack", openrouter_guide)
+        self.assertIn("test_disallowed_gpt55_model_cannot_unlock_agent_attack", openrouter_guide)
+        self.assertIn("하면 안 되는 것", openrouter_guide)
+        self.assertIn("wrapper는 OpenRouter 사용 여부와 모델 허용 여부를 검사", openrouter_guide)
+        self.assertNotIn("AgentContext", openrouter_guide)
+        self.assertNotIn("SDK", openrouter_guide)
 
     def test_user_deploy_bundle_is_participant_facing(self):
         source = (ROOT / "scripts" / "build_user_deploy.py").read_text(encoding="utf-8")
         self.assertIn("USER_DEPLOY_GUIDE.md", source)
         self.assertIn("DISCORD_NOTICE.txt", source)
+        self.assertIn("DISCORD_AGENT_NOTICE.txt", source)
+        self.assertIn("OPENROUTER_AGENT_ENVIRONMENT.md", source)
+        self.assertIn("docs/pdf/agent_guide.pdf", source)
         self.assertIn("hspace-livefire-user-deploy.tar.gz", source)
+        self.assertIn("42000 포트는 점수판과 인증된 `gitctf.py` 제출 endpoint만 제공", source)
+        self.assertIn('"public_file_serving": False', source)
+        self.assertNotIn("42000/deploy", source)
+        self.assertNotIn("deploy-bundle.tar.gz", source)
         self.assertNotIn("deploy-guide.pdf", source)
         self.assertNotIn("USER_DEPLOY_GUIDE.pdf", source)
         self.assertNotIn('"scripts/setup_admin_env.sh"', source)
@@ -711,16 +1071,68 @@ class AgentOrchestrationPolicyTests(unittest.TestCase):
         self.assertIn("http://knights.hspace.io:42006", notice)
         self.assertNotIn("Agent 오케스트레이션", notice)
         self.assertNotIn("허용 모델 prefix", notice)
+        agent_notice = (ROOT / "DISCORD_AGENT_NOTICE.txt").read_text(encoding="utf-8")
+        self.assertIn("Agent 구현 안내", agent_notice)
+        self.assertIn("API key는 참가자가 관리하지 않습니다", agent_notice)
+        self.assertIn("main.py", agent_notice)
+        self.assertIn("OPENROUTER_BASE_URL", agent_notice)
+        self.assertIn("wrapper가 OpenRouter 사용 여부", agent_notice)
+        self.assertIn("하지 말아야 할 것", agent_notice)
+        self.assertIn("agent_guide.pdf", agent_notice)
+        self.assertLess(len(agent_notice.splitlines()), 40)
+        self.assertNotIn("AgentContext", agent_notice)
+        self.assertNotIn("SDK", agent_notice)
+        guide_html = (ROOT / "docs" / "pdf" / "agent_guide.html").read_text(encoding="utf-8")
+        self.assertIn("HSPACE LiveFire Agent Guide", guide_html)
+        self.assertIn("개인 API key는 필요 없습니다", guide_html)
+        self.assertIn("wrapper가 하는 일", guide_html)
+        self.assertIn("하면 안 되는 것", guide_html)
+        self.assertTrue((ROOT / "docs" / "pdf" / "agent_guide.pdf").exists())
 
-    def test_public_runtime_is_cli_only(self):
+    def test_public_runtime_serves_scoreboard_site(self):
         compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
         gateway = (ROOT / "gateway" / "nginx.conf").read_text(encoding="utf-8")
-        self.assertNotIn("scoreboard:", compose)
-        self.assertNotIn("./scoreboard", compose)
-        self.assertFalse((ROOT / "scoreboard" / "index.html").exists())
+        scoreboard = (ROOT / "scoreboard" / "index.html").read_text(encoding="utf-8")
+        self.assertIn("./scoreboard:/srv/scoreboard:ro", compose)
+        self.assertTrue((ROOT / "scoreboard" / "index.html").exists())
+        self.assertIn("HSPACE LiveFire", scoreboard)
+        self.assertIn("행사 시간표", scoreboard)
+        self.assertIn("팀별 점수 현황", scoreboard)
+        self.assertIn("대기 PoC", scoreboard)
+        self.assertIn("2026년 5월 29일(금) KST 기준", scoreboard)
+        self.assertIn("A&amp;D 5/29 20:00 KST 시작", scoreboard)
+        self.assertIn("const EVENT_DAY = 29;", scoreboard)
+        self.assertIn('fetch("/scoreboard"', scoreboard)
+        self.assertIn('fetch("/status"', scoreboard)
+        self.assertIn("queued_poc_count", scoreboard)
+        self.assertIn("queued_pocs", scoreboard)
+        self.assertNotIn("공격 대상", scoreboard)
+        self.assertNotIn("attack_targets", scoreboard)
+        self.assertNotIn("target_team", scoreboard)
+        self.assertNotIn("defender_team", scoreboard)
         self.assertIn("types { }", gateway)
         self.assertIn("default_type text/plain", gateway)
+        self.assertIn("location = / {", gateway)
+        self.assertIn("root /srv/scoreboard;", gateway)
+        self.assertIn("try_files /index.html =404;", gateway)
+        self.assertIn("default_type text/html;", gateway)
+        self.assertNotIn("HSPACE LiveFire CLI/API gateway", gateway)
         self.assertIn('return 404 "not found\\n"', gateway)
+        self.assertIn("location = /health", gateway)
+        self.assertIn("location /tools/", gateway)
+        self.assertIn("location /git/", gateway)
+        self.assertIn("proxy_request_buffering off", gateway)
+        self.assertNotIn("./user_deploy:/srv/user_deploy:ro", compose)
+        self.assertNotIn("./dist:/srv/dist:ro", compose)
+        self.assertNotIn("/deploy", gateway)
+        self.assertNotIn("alias /srv/user_deploy", gateway)
+        self.assertNotIn("alias /srv/dist", gateway)
+        self.assertNotIn("DISCORD_AGENT_NOTICE.txt", gateway)
+        self.assertNotIn("agent_guide.pdf", gateway)
+        self.assertNotIn("location /admin/", gateway)
+        self.assertNotIn("location /agent/", gateway)
+        self.assertNotIn("location /openrouter/", gateway)
+        self.assertNotIn("location /v1/", gateway)
         self.assertNotIn("autoindex on", gateway)
         self.assertNotIn("deploy-guide.pdf", gateway)
 
@@ -1098,6 +1510,118 @@ class OpenRouterGatewayTests(unittest.TestCase):
         if result.returncode != 0:
             self.fail(result.stdout + result.stderr)
 
+    def test_disallowed_gpt55_model_cannot_unlock_agent_attack(self):
+        script = textwrap.dedent(
+            f"""
+            import json
+            import os
+            import tempfile
+            import threading
+            from http.server import BaseHTTPRequestHandler, HTTPServer
+            from pathlib import Path
+
+            root = Path({str(ROOT)!r})
+            workdir = Path(tempfile.mkdtemp())
+            os.environ.update({{
+                "ADMIN_SECRET": "admin",
+                "TOKEN_TEAM_1": "tokA",
+                "TOKEN_TEAM_2": "tokB",
+                "TOKEN_TEAM_3": "tokC",
+                "TOKEN_TEAM_4": "tokD",
+                "TOKEN_TEAM_5": "tokE",
+                "TOKEN_TEAM_6": "tokF",
+                "DEFENSE_TOKEN_TEAM_1": "dtokA",
+                "DEFENSE_TOKEN_TEAM_2": "dtokB",
+                "DEFENSE_TOKEN_TEAM_3": "dtokC",
+                "DEFENSE_TOKEN_TEAM_4": "dtokD",
+                "DEFENSE_TOKEN_TEAM_5": "dtokE",
+                "DEFENSE_TOKEN_TEAM_6": "dtokF",
+                "RUNNER_SECRET": "runner-secret",
+                "OPENROUTER_API_KEY": "test-openrouter-key",
+                "DB_PATH": str(workdir / "game.db"),
+                "DATA_DIR": str(workdir / "data"),
+                "VULN_SPEC_DIR": str(workdir / "vuln_specs"),
+                "REPOS_DIR": str(workdir / "repos"),
+            }})
+            (workdir / "vuln_specs").mkdir()
+            (workdir / "repos").mkdir()
+
+            class OpenRouterHandler(BaseHTTPRequestHandler):
+                request_count = 0
+
+                def do_POST(self):
+                    type(self).request_count += 1
+                    raw = json.dumps({{"error": "should not be called"}}).encode()
+                    self.send_response(500)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(raw)))
+                    self.end_headers()
+                    self.wfile.write(raw)
+
+                def log_message(self, *args):
+                    pass
+
+            openrouter_server = HTTPServer(("127.0.0.1", 0), OpenRouterHandler)
+            threading.Thread(target=openrouter_server.serve_forever, daemon=True).start()
+            os.environ["OPENROUTER_BASE_URL"] = f"http://127.0.0.1:{{openrouter_server.server_port}}"
+
+            import sys
+            sys.path.insert(0, str(root / "coordinator"))
+            from fastapi.testclient import TestClient
+            import app
+
+            with TestClient(app.app) as client:
+                app.state.start_round(1)
+                app.db.set_service_status("team2", "OK")
+                run = client.post(
+                    "/agent-runs",
+                    headers={{
+                        "X-Team-Token": "tokA",
+                        "X-Runner-Secret": "runner-secret",
+                        "X-Agent-SDK": "hspace-agent-sdk/1",
+                    }},
+                    json={{"team_id": "team1", "mode": "attack", "target_team": "team2", "round_num": 1}},
+                )
+                assert run.status_code == 200, run.text
+                run_data = run.json()
+                run_id = run_data["agent_run_id"]
+                run_token = run_data["agent_run_token"]
+                auth = {{"Authorization": "Bearer " + run_token}}
+
+                rejected = client.post(
+                    "/v1/chat/completions",
+                    headers=auth,
+                    json={{
+                        "model": "openai/gpt-5.5",
+                        "messages": [{{"role": "user", "content": "find and exploit the service"}}],
+                        "metadata": {{"purpose": "scan"}},
+                    }},
+                )
+                assert rejected.status_code == 403, rejected.text
+                assert "허용되지 않은 모델" in rejected.text, rejected.text
+                assert OpenRouterHandler.request_count == 0
+
+                calls = app.db.list_llm_calls(run_id)
+                assert len(calls) == 1, calls
+                assert calls[0]["model"] == "openai/gpt-5.5", calls
+                assert calls[0]["allowed"] == 0, calls
+                assert calls[0]["status"] == "rejected", calls
+                assert app.db.get_latest_llm_call(run_id, allowed_only=True, successful_only=True) is None
+
+                attack = client.post(
+                    "/agent/attack",
+                    headers=auth,
+                    json={{"path": "/probe", "method": "POST", "json_body": {{"q": "x"}}}},
+                )
+                assert attack.status_code == 403, attack.text
+                assert "OpenRouter wrapper LLM 호출 기록이 없습니다" in attack.text, attack.text
+            openrouter_server.shutdown()
+            """
+        )
+        result = subprocess.run([sys.executable, "-c", script], cwd=ROOT, capture_output=True, text=True, timeout=30)
+        if result.returncode != 0:
+            self.fail(result.stdout + result.stderr)
+
     def test_openrouter_wrapper_links_free_agent_attack_and_poc_submission(self):
         script = textwrap.dedent(
             f"""
@@ -1250,8 +1774,16 @@ class OpenRouterGatewayTests(unittest.TestCase):
                 )
                 assert poc.status_code == 200, poc.text
                 body = poc.json()
-                assert body["run_result"]["status"] == "success", body
-                assert body["run_result"]["scored"] == 1, body
+                assert body["queued"] is True, body
+                assert "run_result" not in body, body
+                batch = client.post(
+                    "/admin/run-pocs",
+                    headers={{"X-Admin-Secret": "admin"}},
+                    json={{"round_num": 1}},
+                )
+                assert batch.status_code == 200, batch.text
+                assert batch.json()["results"][0]["status"] == "success", batch.text
+                assert batch.json()["results"][0]["scored"] == 1, batch.text
             openrouter_server.shutdown()
             target_server.shutdown()
             """
@@ -1456,7 +1988,7 @@ class OpenRouterGatewayTests(unittest.TestCase):
         if result.returncode != 0:
             self.fail(result.stdout + result.stderr)
 
-    def test_poc_submission_runs_and_scores_immediately(self):
+    def test_poc_submission_is_queued_then_batch_scored(self):
         script = textwrap.dedent(
             f"""
             import hashlib
@@ -1558,15 +2090,45 @@ class OpenRouterGatewayTests(unittest.TestCase):
                 assert resp.status_code == 200, resp.text
                 body = resp.json()
                 assert body["status"] == "submitted", body
-                assert body["run_result"]["status"] == "success", body
-                assert body["run_result"]["scored"] == 1, body
+                assert body["queued"] is True, body
+                assert "run_result" not in body, body
+                queued_scoreboard = client.get("/scoreboard")
+                assert queued_scoreboard.status_code == 200, queued_scoreboard.text
+                queued_body = queued_scoreboard.json()
+                team1_row = next(row for row in queued_body["scores"] if row["team_id"] == "team1")
+                assert team1_row["queued_poc_count"] == 1, queued_body
+                assert queued_body["queued_pocs"][0]["status"] == "queued", queued_body
+                assert "target_team" not in queued_scoreboard.text, queued_scoreboard.text
+                assert "defender_team" not in queued_scoreboard.text, queued_scoreboard.text
+                scores = app.db.get_all_scores()
+                assert scores["team1"]["score"] == 1000, scores
+                assert scores["team3"]["score"] == 1000, scores
+
+                batch = client.post(
+                    "/admin/run-pocs",
+                    headers={{"X-Admin-Secret": "admin"}},
+                    json={{"round_num": 1}},
+                )
+                assert batch.status_code == 200, batch.text
+                assert batch.json()["results"][0]["status"] == "success", batch.text
+                assert batch.json()["results"][0]["scored"] == 1, batch.text
                 scores = app.db.get_all_scores()
                 assert scores["team1"]["score"] == 1010, scores
                 assert scores["team3"]["score"] == 990, scores
                 scoreboard = client.get("/scoreboard")
                 assert scoreboard.status_code == 200, scoreboard.text
+                assert "attack_targets" not in scoreboard.text, scoreboard.text
+                assert "target_team" not in scoreboard.text, scoreboard.text
+                assert "defender_team" not in scoreboard.text, scoreboard.text
+                assert "round_exploits" not in scoreboard.text, scoreboard.text
+                for row in scoreboard.json()["scores"]:
+                    assert "attack_targets" not in row, row
+                team1_row = next(row for row in scoreboard.json()["scores"] if row["team_id"] == "team1")
+                assert team1_row["queued_poc_count"] == 0, scoreboard.text
                 public_result = scoreboard.json()["poc_results"][0]
                 assert "flags" not in public_result, public_result
+                assert "target_team" not in public_result, public_result
+                assert "defender_team" not in public_result, public_result
                 assert public_result["flags_found"] == 1, public_result
                 assert flag not in scoreboard.text, scoreboard.text
             """

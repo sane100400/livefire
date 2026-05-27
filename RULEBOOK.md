@@ -123,6 +123,8 @@ Blind SQLi처럼 여러 요청이 필요한 풀이는 `poc.py` 안에서 재현�
 - attack agent는 공식 run token으로 타겟 repo를 받고, coordinator wrapper로 타겟 서비스를 탐색합니다.
 - 라운드 중 사람이 직접 `poc.py`를 제출하면 안 됩니다.
 - PoC 제출은 `/agent/pocs`, `submit_poc_source()`, `submit_poc()` 중 하나를 사용합니다.
+- PoC는 라운드당 `공격팀 -> 타겟팀 -> vuln_id` 기준 최대 2개까지 제출할 수 있습니다.
+- 제출된 PoC는 즉시 채점하지 않고, 라운드 종료 시점의 scoring snapshot에서 batch 실행합니다.
 
 PoC 규칙:
 
@@ -133,6 +135,7 @@ PoC 규칙:
 - 필요하면 `TARGET_TEAM`, `FLAG_ID` 사용
 - stdout의 마지막 non-empty line에 `HSPACE{...}` 출력
 - 외부 인터넷 호출 금지
+- 기본 실행 timeout은 20초이며, brute force/Blind 계열은 `vuln_spec.json`의 `poc_timeout_sec`으로 늘릴 수 있습니다. 운영 상한은 기본 120초입니다.
 
 금지 패턴: `subprocess`, `os.system`, `os.popen`, `eval`, `exec`, `__import__`, `ctypes`, `pickle.loads`, `shutil.rmtree`
 
@@ -170,6 +173,7 @@ python ../scripts/gitctf.py check --vuln 1 --poc poc.py
 
 탐색 요청 10턴은 `/agent/attack` 요청 수입니다.
 agent 내부 추론 횟수와 제출된 `poc.py`가 재현 중 보내는 요청 수와는 별개입니다.
+PoC 성공 점수는 라운드당 `공격팀 -> 타겟팀 -> vuln_id` 기준 1회만 인정합니다.
 
 ## 금지 사항
 

@@ -1,0 +1,26 @@
+# Agent 구현 안내
+
+공격/방어 agent는 기본 템플릿에서 시작하면 됩니다.
+
+- 공격: `attack_agent/main.py`
+- 방어: `defense_agent/main.py`
+
+`main.py` 안의 구조는 팀이 자유롭게 바꿔도 됩니다. 직접 loop를 짜도 되고, planner/state machine/LangChain/AutoGen 등을 써도 됩니다. 운영 검증은 Python 템플릿 기준으로 가장 잘 맞춰져 있으니 처음 구현은 Python을 권장합니다.
+
+API key는 참가자가 관리하지 않습니다. OpenRouter API key는 서버 coordinator에 설정되어 있으니, 개인 API key를 발급하거나 코드에 넣을 필요가 없습니다.
+
+꼭 지켜야 할 것:
+
+- LLM 호출은 주입된 `OPENROUTER_BASE_URL` 또는 `OPENAI_BASE_URL`로만 보내세요.
+- 공격 요청과 PoC 제출은 `HSPACE_AGENT_BASE_URL`의 `/attack`, `/pocs` wrapper로만 보내세요.
+- wrapper가 OpenRouter 사용 여부, 허용 모델 여부, agent 실행 기록을 검사합니다.
+
+하지 말아야 할 것:
+
+- 개인 OpenRouter/OpenAI key를 코드에 넣기
+- `openrouter.ai`, `api.openai.com`, `api.anthropic.com` 직접 호출
+- 타겟 팀 IP/포트로 직접 공격 요청
+- `openai/gpt-5.5` 같은 비허용 모델 사용
+- PoC에 현재 flag 값을 하드코딩
+
+자세한 구현 예시는 첨부한 `agent_guide.pdf`를 확인해 주세요.

@@ -61,6 +61,7 @@ def run_pocs_for_round(
     output_max_bytes: int,
     attack_reward: int,
     attack_penalty: int,
+    poc_timeout_overrides: Optional[dict[str, dict[str, int]]] = None,
     only_poc_id: Optional[str] = None,
     runner_mode: str = "auto",
     docker_network: str = "hackathon_target-net",
@@ -69,13 +70,29 @@ def run_pocs_for_round(
 ) -> list[dict]:
     results: list[dict] = []
     service_statuses = db.get_service_statuses()
+    successful_keys = db.get_successful_poc_keys(round_num)
 
-    for poc in db.get_runnable_pocs(only_poc_id):
+    for poc in db.get_runnable_pocs(round_num, only_poc_id):
         existing = db.get_poc_result(round_num, poc["id"])
         if existing:
             existing = dict(existing)
             existing["already_ran"] = True
             results.append(existing)
+            continue
+
+        success_key = (poc["attacker_team"], poc["target_team"], poc["flag_id"])
+        if success_key in successful_keys:
+            _record_result(
+                round_num,
+                poc,
+                "skipped_already_scored",
+                [],
+                False,
+                0,
+                0,
+                detail="a PoC already scored for this attacker/target/vuln in this round",
+            )
+            results.append(db.get_poc_result(round_num, poc["id"]) or {})
             continue
 
         target_team = poc["target_team"]
@@ -105,12 +122,17 @@ def run_pocs_for_round(
             "TARGET_TEAM": target_team,
             "FLAG_ID": poc["flag_id"],
         }
+        poc_timeout_sec = (
+            (poc_timeout_overrides or {})
+            .get(target_team, {})
+            .get(poc["flag_id"], timeout_sec)
+        )
 
         try:
             completed = _execute_poc(
                 poc_path=Path(poc["storage_path"]),
                 env=env,
-                timeout_sec=timeout_sec,
+                timeout_sec=poc_timeout_sec,
                 runner_mode=runner_mode,
                 docker_network=docker_network,
                 docker_image=docker_image,
@@ -124,7 +146,7 @@ def run_pocs_for_round(
             stdout = (exc.stdout or b"")[:output_max_bytes]
             stderr = (exc.stderr or b"")[:output_max_bytes]
             status = "timeout"
-            detail = f"timeout after {timeout_sec}s"
+            detail = f"timeout after {poc_timeout_sec}s"
         except Exception as exc:
             status = "runner_error"
             detail = str(exc)
@@ -177,6 +199,7 @@ def run_pocs_for_round(
             db.update_score(poc["attacker_team"], attacker_delta)
             db.update_score(poc["defender_team"], defender_delta)
             db.record_exploit(poc["attacker_team"], poc["defender_team"], round_num)
+            successful_keys.add(success_key)
 
         results.append(db.get_poc_result(round_num, poc["id"]) or {})
 

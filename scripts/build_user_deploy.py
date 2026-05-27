@@ -15,12 +15,15 @@ BUNDLE_ARCHIVE = DIST / "hspace-livefire-user-deploy.tar.gz"
 COPY_PATHS = [
     ".dockerignore",
     "DISCORD_NOTICE.txt",
+    "DISCORD_AGENT_NOTICE.txt",
     "USER_DEPLOY_GUIDE.md",
     "RULEBOOK.md",
     "RULE_SUMMARY.txt",
     "SERVER_AVAILABILITY_GUIDE.md",
     "AGENT_USAGE.txt",
+    "OPENROUTER_AGENT_ENVIRONMENT.md",
     "SCRIPT_USAGE.txt",
+    "docs/pdf/agent_guide.pdf",
     "agent_manifest.json",
     "agent_sdk",
     "web_service",
@@ -51,14 +54,13 @@ README = """# HSPACE LiveFire A&D 일반 사용자 배포 패키지
 
 서버 기준 주소:
 
-- Coordinator API: http://knights.hspace.io:42000
-- CLI 공지 txt: http://knights.hspace.io:42000/deploy/DISCORD_NOTICE.txt
-- 전체 번들: http://knights.hspace.io:42000/deploy-bundle.tar.gz
+- 공개 점수판 및 CLI 제출 endpoint: http://knights.hspace.io:42000
+- 참가자 배포 파일: 운영진이 Discord 첨부 또는 DM으로 직접 전달합니다.
 
-번들은 CLI로 받습니다.
+42000 포트는 점수판과 인증된 `gitctf.py` 제출 endpoint만 제공합니다. 공지, 가이드 PDF, 전체 번들은 42000에서 내려받지 않습니다.
+운영진이 전달한 번들은 아래처럼 풉니다.
 
 ```bash
-curl -fLO http://knights.hspace.io:42000/deploy-bundle.tar.gz
 tar -xzf hspace-livefire-user-deploy.tar.gz
 cd user_deploy
 ```
@@ -69,10 +71,11 @@ cd user_deploy
 |---|---|
 | `USER_DEPLOY_GUIDE.md` | 일반 사용자 CLI 배포 가이드 |
 | `DISCORD_NOTICE.txt` | Discord 공지사항 복붙용 서버/배포 안내 |
+| `DISCORD_AGENT_NOTICE.txt` | Discord 공지사항 복붙용 agent 구현 안내 |
+| `docs/pdf/agent_guide.pdf` | Discord 첨부용 agent 구현 가이드 |
 | `web_service/` | 자유 웹 서비스 개발용 예시 템플릿. `Dockerfile`, `main.py`, `vuln_spec.json` 예시 포함 |
 | `attack_agent/` | 공격 에이전트 템플릿 |
 | `defense_agent/` | 방어 에이전트 템플릿 |
-| `agent_sdk/` | coordinator 연동 SDK |
 | `agent_manifest.json` | runner가 attack/defense entrypoint를 찾는 호환 manifest |
 | `scripts/gitctf.py` | 로그인, 서비스 검증, 제출, agent 빌드를 처리하는 단일 helper |
 | `scripts/agent.py` | `gitctf.py agent`가 호출하는 호환용 agent helper |
@@ -81,6 +84,7 @@ cd user_deploy
 | `RULEBOOK.md` | 참가팀 규칙서 |
 | `SERVER_AVAILABILITY_GUIDE.md` | 서버 가용성 점검과 agent 요청 제한 |
 | `AGENT_USAGE.txt` | agent 빌드와 디버그 사용법 |
+| `OPENROUTER_AGENT_ENVIRONMENT.md` | OpenRouter wrapper 기반 agent 구현 환경 가이드 |
 | `SCRIPT_USAGE.txt` | 관리자/참가자 기본 스크립트 사용법 |
 
 ## 서비스 개발
@@ -130,22 +134,24 @@ python scripts/gitctf.py agent build team1 --mode attack
 
 ## Agent 오케스트레이션
 
-자세한 규칙은 `AGENT_USAGE.txt`를 먼저 읽습니다.
+자세한 규칙은 `AGENT_USAGE.txt`를 먼저 읽고, OpenRouter wrapper 환경은 `OPENROUTER_AGENT_ENVIRONMENT.md`를 봅니다.
 
 핵심은 아래와 같습니다.
 
 - 오케스트레이션 방식은 자유입니다.
+- 기본은 Python `attack_agent/main.py`, `defense_agent/main.py` 템플릿을 고쳐서 시작합니다.
 - LangChain, AutoGen, 직접 만든 planner 등 어떤 구조든 가능합니다.
 - 공식 라운드에서는 주입된 `OPENAI_BASE_URL` 또는 `OPENROUTER_BASE_URL`만 사용합니다.
 - 주입된 `OPENAI_API_KEY` 또는 `OPENROUTER_API_KEY`는 실제 외부 API key가 아니라 `AGENT_RUN_TOKEN`입니다.
 - 외부 AI API URL을 코드에 직접 넣지 않습니다.
+- wrapper가 OpenRouter 호출과 모델 허용 여부를 검사합니다.
 - 서비스 탐색과 PoC 제출은 `HSPACE_AGENT_BASE_URL`의 `/attack`, `/pocs` wrapper를 호출합니다.
 
 ```python
 import os, httpx
 
 auth = {"Authorization": "Bearer " + os.environ["OPENAI_API_KEY"]}
-httpx.post(
+llm = httpx.post(
     os.environ["OPENAI_BASE_URL"] + "/chat/completions",
     headers=auth,
     json={
@@ -153,9 +159,15 @@ httpx.post(
         "messages": [{"role": "user", "content": "scan target"}],
     },
 )
+llm.raise_for_status()
+llm_call_id = int(llm.headers["X-LLM-Call-ID"])
 
 auth = {"Authorization": "Bearer " + os.environ["AGENT_RUN_TOKEN"]}
-httpx.post(os.environ["HSPACE_AGENT_BASE_URL"] + "/attack", headers=auth, json={"payload": "test"})
+httpx.post(
+    os.environ["HSPACE_AGENT_BASE_URL"] + "/attack",
+    headers=auth,
+    json={"llm_call_id": llm_call_id, "path": "/probe", "method": "POST"},
+)
 ```
 
 ## 방어 에이전트 이미지
@@ -206,9 +218,9 @@ def main() -> int:
     (DEST / "README.md").write_text(README, encoding="utf-8")
     (DEST / "bundle_manifest.json").write_text(
         json.dumps({
-            "server": "http://knights.hspace.io:42000",
-            "notice": "http://knights.hspace.io:42000/deploy/DISCORD_NOTICE.txt",
-            "bundle": "http://knights.hspace.io:42000/deploy-bundle.tar.gz",
+            "scoreboard": "http://knights.hspace.io:42000",
+            "distribution": "discord_attachment_or_direct_file",
+            "public_file_serving": False,
             "cli_only": True,
             "included": COPY_PATHS,
         }, indent=2, ensure_ascii=False) + "\n",

@@ -140,6 +140,7 @@ def _create_schema(conn: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS poc_submissions (
             id                TEXT PRIMARY KEY,
             agent_run_id      TEXT NOT NULL REFERENCES agent_runs(id),
+            llm_call_id       INTEGER,
             attacker_team     TEXT NOT NULL,
             target_team       TEXT NOT NULL,
             defender_team     TEXT NOT NULL,
@@ -153,7 +154,7 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             review_reason     TEXT,
             created_at        TEXT NOT NULL,
             accepted_at       TEXT,
-            UNIQUE(attacker_team, target_team, sha256)
+            UNIQUE(submitted_round, attacker_team, target_team, sha256)
         );
 
         CREATE TABLE IF NOT EXISTS poc_results (
@@ -194,12 +195,66 @@ def _create_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "llm_calls", "purpose", "TEXT NOT NULL DEFAULT 'general'")
     _ensure_column(conn, "poc_submissions", "llm_call_id", "INTEGER")
     _ensure_column(conn, "agent_runs", "run_token_hash", "TEXT")
+    _migrate_poc_submissions_unique_per_round(conn)
 
 
 def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
     cols = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
     if column not in cols:
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
+def _migrate_poc_submissions_unique_per_round(conn: sqlite3.Connection) -> None:
+    """Old DBs used a global SHA uniqueness constraint; PoCs are now round-scoped."""
+    for idx in conn.execute("PRAGMA index_list(poc_submissions)").fetchall():
+        if not idx["unique"]:
+            continue
+        cols = [
+            col["name"]
+            for col in conn.execute(f"PRAGMA index_info({idx['name']})").fetchall()
+        ]
+        if cols == ["submitted_round", "attacker_team", "target_team", "sha256"]:
+            return
+
+    conn.execute("PRAGMA foreign_keys=OFF")
+    try:
+        conn.executescript("""
+            CREATE TABLE poc_submissions_new (
+                id                TEXT PRIMARY KEY,
+                agent_run_id      TEXT NOT NULL REFERENCES agent_runs(id),
+                llm_call_id       INTEGER,
+                attacker_team     TEXT NOT NULL,
+                target_team       TEXT NOT NULL,
+                defender_team     TEXT NOT NULL,
+                flag_id           TEXT NOT NULL,
+                submitted_round   INTEGER NOT NULL,
+                file_name         TEXT NOT NULL,
+                sha256            TEXT NOT NULL,
+                storage_path      TEXT NOT NULL,
+                status            TEXT NOT NULL DEFAULT 'submitted',
+                canonical_poc_id  TEXT,
+                review_reason     TEXT,
+                created_at        TEXT NOT NULL,
+                accepted_at       TEXT,
+                UNIQUE(submitted_round, attacker_team, target_team, sha256)
+            );
+
+            INSERT INTO poc_submissions(
+                id, agent_run_id, llm_call_id, attacker_team, target_team, defender_team,
+                flag_id, submitted_round, file_name, sha256, storage_path, status,
+                canonical_poc_id, review_reason, created_at, accepted_at
+            )
+            SELECT
+                id, agent_run_id, llm_call_id, attacker_team, target_team, defender_team,
+                flag_id, submitted_round, file_name, sha256, storage_path, status,
+                canonical_poc_id, review_reason, created_at, accepted_at
+            FROM poc_submissions;
+
+            DROP TABLE poc_submissions;
+            ALTER TABLE poc_submissions_new RENAME TO poc_submissions;
+        """)
+    finally:
+        conn.execute("PRAGMA foreign_keys=ON")
 
 
 # ── game_meta ──────────────────────────────────────────────────────────
@@ -661,10 +716,20 @@ def get_latest_llm_call(
 
 # ── poc_submissions ───────────────────────────────────────────────────
 
-def find_poc_by_sha(attacker_team: str, target_team: str, sha256: str) -> Optional[dict]:
+def find_poc_by_sha(
+    attacker_team: str,
+    target_team: str,
+    sha256: str,
+    submitted_round: Optional[int] = None,
+) -> Optional[dict]:
+    clauses = ["attacker_team=?", "target_team=?", "sha256=?"]
+    params: list[object] = [attacker_team, target_team, sha256]
+    if submitted_round is not None:
+        clauses.append("submitted_round=?")
+        params.append(submitted_round)
     row = _get_conn().execute(
-        "SELECT * FROM poc_submissions WHERE attacker_team=? AND target_team=? AND sha256=?",
-        (attacker_team, target_team, sha256),
+        f"SELECT * FROM poc_submissions WHERE {' AND '.join(clauses)} ORDER BY created_at DESC LIMIT 1",
+        params,
     ).fetchone()
     return dict(row) if row else None
 
@@ -747,9 +812,25 @@ def list_poc_submissions(status: Optional[str] = None, limit: int = 500) -> list
     return [dict(r) for r in rows]
 
 
-def get_runnable_pocs(only_poc_id: Optional[str] = None) -> list[dict]:
+def count_active_poc_submissions_for_vuln(
+    attacker_team: str,
+    target_team: str,
+    flag_id: str,
+    submitted_round: int,
+) -> int:
+    row = _get_conn().execute(
+        "SELECT COUNT(*) AS cnt FROM poc_submissions "
+        "WHERE attacker_team=? AND target_team=? AND flag_id=? AND submitted_round=? "
+        "AND status NOT IN ('rejected', 'merged', 'disabled')",
+        (attacker_team, target_team, flag_id, submitted_round),
+    ).fetchone()
+    return int(row["cnt"]) if row else 0
+
+
+def get_runnable_pocs(round_num: int, only_poc_id: Optional[str] = None) -> list[dict]:
     params: list[object] = ["rejected", "merged", "disabled"]
-    where = "WHERE status NOT IN (?,?,?)"
+    where = "WHERE status NOT IN (?,?,?) AND submitted_round=?"
+    params.append(round_num)
     if only_poc_id:
         where += " AND id=?"
         params.append(only_poc_id)
@@ -844,6 +925,47 @@ def count_successful_pocs_by_attacker() -> dict[str, int]:
         "WHERE status='success' AND scored=1 GROUP BY attacker_team"
     ).fetchall()
     return {r["attacker_team"]: r["cnt"] for r in rows}
+
+
+def count_pending_pocs_by_attacker(round_num: int) -> dict[str, int]:
+    rows = _get_conn().execute(
+        "SELECT p.attacker_team, COUNT(*) AS cnt FROM poc_submissions p "
+        "LEFT JOIN poc_results r ON r.round_num=p.submitted_round AND r.poc_id=p.id "
+        "WHERE p.submitted_round=? AND p.status NOT IN ('rejected', 'merged', 'disabled') "
+        "AND r.id IS NULL GROUP BY p.attacker_team",
+        (round_num,),
+    ).fetchall()
+    return {r["attacker_team"]: r["cnt"] for r in rows}
+
+
+def list_pending_pocs_public(round_num: int, limit: int = 100) -> list[dict]:
+    rows = _get_conn().execute(
+        "SELECT p.id, p.attacker_team, p.flag_id, p.created_at, p.status "
+        "FROM poc_submissions p "
+        "LEFT JOIN poc_results r ON r.round_num=p.submitted_round AND r.poc_id=p.id "
+        "WHERE p.submitted_round=? AND p.status NOT IN ('rejected', 'merged', 'disabled') "
+        "AND r.id IS NULL ORDER BY p.created_at DESC LIMIT ?",
+        (round_num, limit),
+    ).fetchall()
+    return [
+        {
+            "poc_id": r["id"],
+            "attacker_team": r["attacker_team"],
+            "flag_id": r["flag_id"],
+            "status": "queued",
+            "created_at": r["created_at"],
+        }
+        for r in rows
+    ]
+
+
+def get_successful_poc_keys(round_num: int) -> set[tuple[str, str, str]]:
+    rows = _get_conn().execute(
+        "SELECT attacker_team, target_team, flag_id FROM poc_results "
+        "WHERE round_num=? AND status='success' AND scored=1",
+        (round_num,),
+    ).fetchall()
+    return {(r["attacker_team"], r["target_team"], r["flag_id"]) for r in rows}
 
 
 def sum_poc_score_deltas(round_num: int, team_ids: list[str]) -> dict[str, int]:

@@ -1,0 +1,681 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HSPACE LiveFire Scoreboard</title>
+  <style>
+    :root {
+      --bg: #f7f8fb;
+      --panel: #ffffff;
+      --ink: #111827;
+      --muted: #64748b;
+      --line: #d8dee9;
+      --line-soft: #edf0f5;
+      --accent: #0f766e;
+      --accent-soft: #d9f6f1;
+      --warn: #b45309;
+      --danger: #b91c1c;
+      --ok: #15803d;
+      --shadow: 0 10px 24px rgba(15, 23, 42, .08);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: Inter, "Pretendard", "Noto Sans KR", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      letter-spacing: 0;
+    }
+
+    .shell {
+      width: min(1220px, calc(100% - 28px));
+      margin: 0 auto;
+      padding: 16px 0 18px;
+    }
+
+    header {
+      align-items: center;
+      display: flex;
+      gap: 14px;
+      justify-content: space-between;
+      margin-bottom: 12px;
+    }
+
+    .brand {
+      align-items: center;
+      display: flex;
+      gap: 14px;
+      min-width: 0;
+    }
+
+    .mark {
+      align-items: center;
+      background: #0f172a;
+      border-radius: 8px;
+      color: white;
+      display: grid;
+      flex: 0 0 44px;
+      font-weight: 800;
+      height: 44px;
+      justify-items: center;
+      line-height: 1;
+      width: 44px;
+    }
+
+    h1 {
+      font-size: clamp(24px, 3vw, 36px);
+      line-height: 1.1;
+      margin: 0;
+    }
+
+    .subtitle {
+      color: var(--muted);
+      font-size: 14px;
+      margin-top: 5px;
+    }
+
+    .statusbar {
+      align-items: center;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      justify-content: flex-end;
+    }
+
+    .pill {
+      align-items: center;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      display: inline-flex;
+      font-size: 12px;
+      font-weight: 700;
+      gap: 6px;
+      min-height: 30px;
+      padding: 6px 10px;
+      white-space: nowrap;
+    }
+
+    .dot {
+      border-radius: 50%;
+      display: inline-block;
+      height: 9px;
+      width: 9px;
+    }
+
+    .dot.active { background: var(--ok); }
+    .dot.idle { background: var(--warn); }
+    .dot.error { background: var(--danger); }
+
+    .grid {
+      display: grid;
+      gap: 12px;
+      grid-template-areas:
+        "scores schedule"
+        "scores feed"
+        "rounds rounds";
+      grid-template-columns: minmax(0, 1.45fr) minmax(292px, .72fr);
+    }
+
+    .scores-card { grid-area: scores; }
+    .schedule-card { grid-area: schedule; }
+    .rounds-card { grid-area: rounds; }
+    .feed-card { grid-area: feed; }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      min-width: 0;
+    }
+
+    .panel-head {
+      align-items: center;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      gap: 10px;
+      justify-content: space-between;
+      padding: 11px 13px;
+    }
+
+    h2 {
+      font-size: 16px;
+      line-height: 1.2;
+      margin: 0;
+    }
+
+    .hint {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .table-wrap { overflow-x: auto; }
+
+    table {
+      border-collapse: collapse;
+      min-width: 720px;
+      width: 100%;
+    }
+
+    th, td {
+      border-bottom: 1px solid var(--line-soft);
+      padding: 9px 11px;
+      text-align: left;
+      vertical-align: middle;
+      white-space: nowrap;
+    }
+
+    th {
+      background: #fbfcfe;
+      color: #475569;
+      font-size: 12px;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+
+    tbody tr:first-child td { background: #f8fffd; }
+    tbody tr:hover td { background: #f8fafc; }
+
+    .rank {
+      align-items: center;
+      background: #e2e8f0;
+      border-radius: 999px;
+      display: inline-flex;
+      font-size: 12px;
+      font-weight: 800;
+      height: 24px;
+      justify-content: center;
+      width: 32px;
+    }
+
+    .score {
+      font-size: 18px;
+      font-variant-numeric: tabular-nums;
+      font-weight: 850;
+    }
+
+    .status {
+      border-radius: 999px;
+      display: inline-flex;
+      font-size: 12px;
+      font-weight: 800;
+      padding: 5px 9px;
+    }
+
+    .status.ok { background: #dcfce7; color: #166534; }
+    .status.faulty { background: #fef3c7; color: #92400e; }
+    .status.down { background: #fee2e2; color: #991b1b; }
+    .status.unknown { background: #e2e8f0; color: #475569; }
+
+    .timeline {
+      display: grid;
+      gap: 6px;
+      padding: 10px;
+    }
+
+    .slot {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      display: grid;
+      gap: 3px 8px;
+      grid-template-columns: 92px 1fr;
+      padding: 7px 9px;
+    }
+
+    .slot.now {
+      background: var(--accent-soft);
+      border-color: #5eead4;
+    }
+
+    .slot-time {
+      color: #334155;
+      font-size: 11px;
+      font-variant-numeric: tabular-nums;
+      font-weight: 850;
+      line-height: 1.25;
+    }
+
+    .slot-title {
+      font-size: 13px;
+      font-weight: 800;
+      line-height: 1.25;
+    }
+
+    .slot-note {
+      color: var(--muted);
+      font-size: 11px;
+      grid-column: 2;
+      line-height: 1.25;
+    }
+
+    .round-grid {
+      display: grid;
+      gap: 6px;
+      grid-template-columns: repeat(10, minmax(0, 1fr));
+      padding: 0 12px 12px;
+    }
+
+    .round {
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      min-height: 50px;
+      padding: 7px;
+    }
+
+    .round.now {
+      background: #0f766e;
+      border-color: #0f766e;
+      color: white;
+    }
+
+    .round.done {
+      background: #f1f5f9;
+      color: #64748b;
+    }
+
+    .round-label {
+      font-size: 11px;
+      font-weight: 850;
+    }
+
+    .round-time {
+      font-size: 10px;
+      line-height: 1.25;
+      margin-top: 3px;
+    }
+
+    .feed {
+      display: grid;
+      gap: 6px;
+      overflow: visible;
+      padding: 10px;
+    }
+
+    .event {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px 9px;
+    }
+
+    .event strong { font-size: 13px; }
+    .event div { color: var(--muted); font-size: 12px; margin-top: 3px; }
+
+    .empty, .error {
+      color: var(--muted);
+      padding: 16px 13px;
+    }
+
+    .error { color: var(--danger); }
+
+    @media (max-width: 900px) {
+      header { align-items: flex-start; flex-direction: column; }
+      .statusbar { justify-content: flex-start; }
+      .grid {
+        grid-template-areas:
+          "scores"
+          "schedule"
+          "rounds"
+          "feed";
+        grid-template-columns: 1fr;
+      }
+      .timeline {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      .round-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    }
+
+    @media (max-width: 560px) {
+      .shell { width: min(100% - 18px, 1180px); padding-top: 10px; }
+      .mark { height: 40px; width: 40px; flex-basis: 40px; }
+      .statusbar {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        width: 100%;
+      }
+      .pill {
+        justify-content: center;
+        text-align: center;
+        white-space: normal;
+      }
+      .panel-head { align-items: flex-start; flex-direction: column; }
+      .timeline { grid-template-columns: 1fr; }
+      .slot { grid-template-columns: 86px 1fr; }
+      .round-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+
+    @media (max-width: 720px) {
+      .table-wrap { overflow: visible; }
+      table {
+        display: block;
+        min-width: 0;
+      }
+      thead { display: none; }
+      tbody {
+        display: grid;
+        gap: 8px;
+        padding: 10px;
+      }
+      tr {
+        background: #fff;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        display: grid;
+        padding: 8px 10px;
+      }
+      tbody tr:first-child td,
+      tbody tr:hover td { background: transparent; }
+      td {
+        align-items: center;
+        border-bottom: 0;
+        display: flex;
+        gap: 12px;
+        justify-content: space-between;
+        padding: 6px 0;
+        white-space: normal;
+      }
+      td::before {
+        color: var(--muted);
+        content: attr(data-label);
+        flex: 0 0 78px;
+        font-size: 12px;
+        font-weight: 800;
+      }
+      td.empty,
+      td.error {
+        display: block;
+        padding: 12px 0;
+      }
+      td.empty::before,
+      td.error::before { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <div class="brand">
+        <div class="mark">A&amp;D</div>
+        <div>
+          <h1>HSPACE LiveFire</h1>
+          <div class="subtitle">A&amp;D 타임테이블과 팀별 점수 현황</div>
+        </div>
+      </div>
+      <div class="statusbar">
+        <div class="pill"><span id="live-dot" class="dot idle"></span><span id="round-state">대기 중</span></div>
+        <div class="pill" id="round-pill">Round 0 / 20</div>
+        <div class="pill">A&amp;D 5/29 20:00 KST 시작</div>
+        <div class="pill" id="clock-pill">KST --:--:--</div>
+      </div>
+    </header>
+
+    <main class="grid">
+      <section class="panel scores-card">
+        <div class="panel-head">
+          <h2>팀별 점수 현황</h2>
+          <div class="hint" id="updated-at">업데이트 대기 중</div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>순위</th>
+                <th>팀</th>
+                <th>점수</th>
+                <th>서비스</th>
+                <th>공격 턴</th>
+                <th>대기 PoC</th>
+                <th>성공 PoC</th>
+              </tr>
+            </thead>
+            <tbody id="score-body">
+              <tr><td colspan="7" class="empty">점수 데이터를 불러오는 중입니다.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <aside class="panel schedule-card">
+        <div class="panel-head">
+          <h2>행사 시간표</h2>
+          <div class="hint">2026년 5월 29일(금) KST 기준</div>
+        </div>
+        <div class="timeline" id="timeline"></div>
+      </aside>
+
+      <section class="panel rounds-card">
+        <div class="panel-head">
+          <h2>A&amp;D 라운드</h2>
+          <div class="hint">5월 29일 20:00부터 30분 단위</div>
+        </div>
+        <div class="round-grid" id="round-grid"></div>
+      </section>
+
+      <section class="panel feed-card">
+        <div class="panel-head">
+          <h2>현재 라운드 기록</h2>
+          <div class="hint" id="exploit-count">0건</div>
+        </div>
+        <div class="feed" id="event-feed">
+          <div class="empty">아직 공개할 기록이 없습니다.</div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const TOTAL_ROUNDS = 20;
+    const ROUND_MINUTES = 30;
+    const EVENT_YEAR = 2026;
+    const EVENT_MONTH_INDEX = 4;
+    const EVENT_DAY = 29;
+    const schedule = [
+      ["18:00", "19:00", "저녁식사"],
+      ["19:00", "19:30", "서비스 발표"],
+      ["19:30", "20:00", "A&D 준비"],
+      ["20:00", "06:00", "A&D 라운드 진행", "20라운드, 라운드당 30분"],
+      ["06:00", "06:30", "점수 집계"],
+      ["06:30", "07:00", "시상식 후 귀가"]
+    ];
+
+    const fmt = new Intl.DateTimeFormat("ko-KR", {
+      timeZone: "Asia/Seoul",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false
+    });
+
+    function kstNow() {
+      return new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Seoul" }));
+    }
+
+    function eventBaseDate() {
+      const base = new Date(EVENT_YEAR, EVENT_MONTH_INDEX, EVENT_DAY);
+      base.setHours(0, 0, 0, 0);
+      return base;
+    }
+
+    function atTime(base, hhmm, nextDay = false) {
+      const [h, m] = hhmm.split(":").map(Number);
+      const d = new Date(base);
+      d.setHours(h, m, 0, 0);
+      if (nextDay) d.setDate(d.getDate() + 1);
+      return d;
+    }
+
+    function scheduleWindow(base, start, end) {
+      const startNext = start < "12:00";
+      const endNext = end <= start || end < "12:00";
+      return [atTime(base, start, startNext), atTime(base, end, endNext)];
+    }
+
+    function humanTime(date) {
+      return date.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false });
+    }
+
+    function humanDayTime(date) {
+      return `${date.getMonth() + 1}/${date.getDate()} ${humanTime(date)}`;
+    }
+
+    function humanRange(start, end) {
+      const sameDay = start.getFullYear() === end.getFullYear()
+        && start.getMonth() === end.getMonth()
+        && start.getDate() === end.getDate();
+      return sameDay ? `${humanDayTime(start)}-${humanTime(end)}` : `${humanDayTime(start)}-${humanDayTime(end)}`;
+    }
+
+    function renderTimeline(now = kstNow()) {
+      const base = eventBaseDate();
+      const root = document.getElementById("timeline");
+      root.innerHTML = "";
+      for (const item of schedule) {
+        const [start, end, title, note] = item;
+        const [s, e] = scheduleWindow(base, start, end);
+        const active = now >= s && now < e;
+        const el = document.createElement("div");
+        el.className = "slot" + (active ? " now" : "");
+        el.innerHTML = `
+          <div class="slot-time">${humanRange(s, e)}</div>
+          <div class="slot-title">${title}</div>
+          ${note ? `<div class="slot-note">${note}</div>` : ""}
+        `;
+        root.appendChild(el);
+      }
+    }
+
+    function scheduledRound(now = kstNow()) {
+      const base = eventBaseDate();
+      const start = atTime(base, "20:00", false);
+      const end = new Date(start.getTime() + TOTAL_ROUNDS * ROUND_MINUTES * 60 * 1000);
+      if (now < start || now >= end) return 0;
+      return Math.floor((now - start) / (ROUND_MINUTES * 60 * 1000)) + 1;
+    }
+
+    function renderRounds(currentRound, now = kstNow()) {
+      const grid = document.getElementById("round-grid");
+      const base = eventBaseDate();
+      const start = atTime(base, "20:00", false);
+      const scheduled = scheduledRound(now);
+      const activeRound = currentRound || scheduled;
+      grid.innerHTML = "";
+      for (let i = 1; i <= TOTAL_ROUNDS; i += 1) {
+        const s = new Date(start.getTime() + (i - 1) * ROUND_MINUTES * 60 * 1000);
+        const e = new Date(s.getTime() + ROUND_MINUTES * 60 * 1000);
+        const el = document.createElement("div");
+        el.className = "round";
+        if (i === activeRound) el.classList.add("now");
+        else if (i < activeRound) el.classList.add("done");
+        el.innerHTML = `<div class="round-label">Round ${i}</div><div class="round-time">${humanRange(s, e)}</div>`;
+        grid.appendChild(el);
+      }
+    }
+
+    function statusClass(value) {
+      const v = String(value || "UNKNOWN").toUpperCase();
+      if (v === "OK") return "ok";
+      if (v === "FAULTY") return "faulty";
+      if (v === "DOWN") return "down";
+      return "unknown";
+    }
+
+    function renderScores(data) {
+      const tbody = document.getElementById("score-body");
+      const rows = data.scores || [];
+      if (!rows.length) {
+        tbody.innerHTML = `<tr><td colspan="7" class="empty">표시할 팀 점수가 없습니다.</td></tr>`;
+        return;
+      }
+      tbody.innerHTML = rows.map((team, index) => {
+        const service = team.service_status || "UNKNOWN";
+        return `
+          <tr>
+            <td data-label="순위"><span class="rank">${index + 1}</span></td>
+            <td data-label="팀"><strong>${team.team_id}</strong><div class="hint">${team.name || ""}</div></td>
+            <td data-label="점수"><span class="score">${team.score}</span></td>
+            <td data-label="서비스"><span class="status ${statusClass(service)}">${service}</span></td>
+            <td data-label="공격 턴">${team.turns_used ?? 0} / ${(team.turns_used ?? 0) + (team.turns_remaining ?? 0)}</td>
+            <td data-label="대기 PoC">${team.queued_poc_count ?? 0}</td>
+            <td data-label="성공 PoC">${team.exploit_count_total ?? 0}</td>
+          </tr>
+        `;
+      }).join("");
+    }
+
+    function renderEvents(data) {
+      const feed = document.getElementById("event-feed");
+      const queued = (data.queued_pocs || []).map((event) => ({
+        ...event,
+        display_status: "queued",
+        flags_found: 0
+      }));
+      const completed = (data.poc_results || []).map((event) => ({
+        ...event,
+        display_status: event.status || "unknown"
+      }));
+      const events = queued.concat(completed);
+      document.getElementById("exploit-count").textContent = `${events.length}건`;
+      if (!events.length) {
+        feed.innerHTML = `<div class="empty">아직 공개할 기록이 없습니다.</div>`;
+        return;
+      }
+      feed.innerHTML = events.slice(0, 6).map((event) => {
+        const status = event.display_status || event.status || "unknown";
+        const flags = event.flags_found ?? 0;
+        return `
+          <div class="event">
+            <strong>${event.attacker_team || event.attacker || "-"}</strong>
+            <div>${event.flag_id || "flag"} · ${status} · flags ${flags}</div>
+          </div>
+        `;
+      }).join("");
+    }
+
+    function setRoundState(data) {
+      const active = Boolean(data.round_active);
+      const dot = document.getElementById("live-dot");
+      dot.className = "dot " + (active ? "active" : "idle");
+      document.getElementById("round-state").textContent = active ? "라운드 진행 중" : "라운드 대기";
+      document.getElementById("round-pill").textContent = `Round ${data.round ?? 0} / ${data.total_rounds ?? TOTAL_ROUNDS}`;
+    }
+
+    async function load() {
+      try {
+        const [scoreRes, statusRes] = await Promise.all([
+          fetch("/scoreboard", { cache: "no-store" }),
+          fetch("/status", { cache: "no-store" })
+        ]);
+        if (!scoreRes.ok) throw new Error(`scoreboard HTTP ${scoreRes.status}`);
+        const score = await scoreRes.json();
+        const status = statusRes.ok ? await statusRes.json() : {};
+        const merged = { ...score, ...status };
+        renderScores(score);
+        renderEvents(score);
+        setRoundState(merged);
+        renderRounds(merged.round || score.round || 0);
+        document.getElementById("updated-at").textContent = `마지막 업데이트 ${fmt.format(new Date())}`;
+      } catch (error) {
+        document.getElementById("score-body").innerHTML = `<tr><td colspan="7" class="error">점수 데이터를 불러오지 못했습니다: ${error.message}</td></tr>`;
+        const dot = document.getElementById("live-dot");
+        dot.className = "dot error";
+        document.getElementById("round-state").textContent = "연결 오류";
+      }
+    }
+
+    function tickClock() {
+      const now = kstNow();
+      document.getElementById("clock-pill").textContent = `KST ${fmt.format(new Date())}`;
+      renderTimeline(now);
+      if (!document.getElementById("round-grid").children.length) renderRounds(0, now);
+    }
+
+    tickClock();
+    load();
+    setInterval(tickClock, 1000);
+    setInterval(load, 10000);
+  </script>
+</body>
+</html>

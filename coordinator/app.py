@@ -4,6 +4,7 @@ import json
 import os
 import secrets
 import time
+import asyncio
 import httpx
 from fastapi import FastAPI, HTTPException, Header, Request, Query, UploadFile, File, Form
 from fastapi.responses import JSONResponse, Response
@@ -34,8 +35,12 @@ from config import (
     ALLOWED_MODEL_PREFIXES,
     VULN_SPEC_DIR, DB_PATH,
     OPENROUTER_API_KEY, OPENROUTER_BASE_URL,
-    DATA_DIR, POC_TIMEOUT_SEC, POC_MAX_BYTES, POC_OUTPUT_MAX_BYTES,
+    DATA_DIR, POC_TIMEOUT_SEC, POC_MAX_TIMEOUT_SEC, POC_MAX_BYTES, POC_OUTPUT_MAX_BYTES,
+    MAX_POCS_PER_VULN_ROUND,
     POC_RUNNER_MODE, POC_DOCKER_NETWORK, POC_DOCKER_IMAGE, POC_HOST_DATA_DIR,
+    SCORING_SNAPSHOT_ENABLED, SCORING_SNAPSHOT_NETWORK,
+    SCORING_SNAPSHOT_IP_PREFIX, SCORING_SNAPSHOT_IP_START,
+    SCORING_SNAPSHOT_STARTUP_GRACE_SEC, SCORING_SNAPSHOT_KEEP_CONTAINERS,
     ALLOW_STUDENT_AGENT_RUNS, ALLOW_UNSAFE_AGENT_RUNS,
     MAX_LLM_MESSAGES, MAX_LLM_PROMPT_BYTES, MAX_LLM_MAX_TOKENS,
     MAX_ATTACK_REQUEST_BYTES, MAX_ATTACK_RESPONSE_BYTES,
@@ -57,6 +62,7 @@ from scorer import (
 )
 from agent_runner import run_attack_agents, run_defense_agents, stop_round_agents
 from poc_runner import run_pocs_for_round
+from scoring_snapshot import create_round_snapshot, cleanup_round_snapshot
 
 SDK_NAME = "hspace-agent-sdk/1"
 SDK_SIGNATURE_MAX_SKEW_SEC = 300
@@ -1050,21 +1056,51 @@ def _validate_poc_static(file_name: str, content: bytes) -> str:
     return ""
 
 
-def _run_pocs(round_num: int, only_poc_id: str | None = None) -> list[dict]:
+def _run_pocs(
+    round_num: int,
+    only_poc_id: str | None = None,
+    teams_override: dict | None = None,
+) -> list[dict]:
     return run_pocs_for_round(
         round_num=round_num,
-        teams=TEAMS,
+        teams=teams_override or TEAMS,
         data_dir=DATA_DIR,
         timeout_sec=POC_TIMEOUT_SEC,
         output_max_bytes=POC_OUTPUT_MAX_BYTES,
         attack_reward=ATTACK_REWARD,
         attack_penalty=ATTACK_PENALTY,
+        poc_timeout_overrides=_poc_timeout_overrides(vuln_specs),
         only_poc_id=only_poc_id,
         runner_mode=POC_RUNNER_MODE,
         docker_network=POC_DOCKER_NETWORK,
         docker_image=POC_DOCKER_IMAGE,
         host_data_dir=POC_HOST_DATA_DIR,
     )
+
+
+def _poc_timeout_overrides(specs: dict) -> dict[str, dict[str, int]]:
+    overrides: dict[str, dict[str, int]] = {}
+    for team_id, team_spec in specs.items():
+        vulns = team_spec.get("vulnerabilities", []) if isinstance(team_spec, dict) else team_spec
+        if not isinstance(vulns, list):
+            continue
+        for vuln in vulns:
+            if not isinstance(vuln, dict):
+                continue
+            raw_timeout = vuln.get("poc_timeout_sec")
+            if raw_timeout is None:
+                checker_spec = vuln.get("checker", {})
+                if isinstance(checker_spec, dict):
+                    raw_timeout = checker_spec.get("poc_timeout_sec")
+            if raw_timeout is None:
+                continue
+            try:
+                timeout = int(raw_timeout)
+            except (TypeError, ValueError):
+                continue
+            timeout = max(1, min(timeout, POC_MAX_TIMEOUT_SEC))
+            overrides.setdefault(team_id, {})[str(vuln.get("id"))] = timeout
+    return overrides
 
 
 def _submit_poc_content(
@@ -1100,16 +1136,28 @@ def _submit_poc_content(
     if reason:
         raise HTTPException(400, reason)
 
-    duplicate = db.find_poc_by_sha(attacker_team, target_team, actual_sha)
+    duplicate = db.find_poc_by_sha(attacker_team, target_team, actual_sha, run["round_num"])
     if duplicate:
-        run_results = _run_pocs(state.current_round, only_poc_id=duplicate["id"])
         return {
             "poc_id": duplicate["id"],
             "status": "merged",
             "canonical_poc_id": duplicate.get("canonical_poc_id") or duplicate["id"],
             "sha256": actual_sha,
-            "run_result": run_results[0] if run_results else None,
+            "queued": True,
         }
+
+    current_count = db.count_active_poc_submissions_for_vuln(
+        attacker_team,
+        target_team,
+        flag_id,
+        run["round_num"],
+    )
+    if current_count >= MAX_POCS_PER_VULN_ROUND:
+        raise HTTPException(
+            429,
+            f"PoC 제출 제한 초과: 라운드당 {attacker_team}->{target_team} {flag_id}는 "
+            f"최대 {MAX_POCS_PER_VULN_ROUND}개까지 제출 가능",
+        )
 
     poc_id = str(uuid4())
     storage_dir = Path(DATA_DIR) / "pocs" / str(run["round_num"]) / poc_id
@@ -1130,12 +1178,11 @@ def _submit_poc_content(
         sha256=actual_sha,
         storage_path=str(storage_path),
     )
-    run_results = _run_pocs(state.current_round, only_poc_id=poc["id"])
     return {
         "poc_id": poc["id"],
         "status": poc["status"],
         "sha256": poc["sha256"],
-        "run_result": run_results[0] if run_results else None,
+        "queued": True,
     }
 
 
@@ -1280,8 +1327,6 @@ async def start_round(
         TEAMS, vuln_specs, round_flags_by_team, CHECKER_TOKEN
     )
 
-    poc_results = _run_pocs(next_round)
-
     # 공식 공격/방어 에이전트 컨테이너 실행
     run_attack_agents(next_round, TEAMS, COORDINATOR_URL, TEAM_TOKENS, ATTACK_AGENT_IMAGES)
     run_defense_agents(next_round, TEAMS, COORDINATOR_URL, DEFENSE_TOKENS, DEFENSE_AGENT_IMAGES)
@@ -1292,7 +1337,8 @@ async def start_round(
         "message": f"라운드 {next_round} 시작",
         "checker": checker_summary,
         "flags_generated": {tid: len(flags) for tid, flags in round_flags.items()},
-        "pocs_run": len(poc_results),
+        "pocs_run": 0,
+        "poc_execution": "deferred_until_round_end",
     }
 
 
@@ -1304,51 +1350,79 @@ async def end_round(x_admin_secret: str = Header(...)):
 
     current = state.current_round
     stop_round_agents(current)
-
-    # 라운드 종료 시에도 전체 checker를 실행해 배포/재시작 후 stale 상태로
-    # 가용성 보너스가 잘못 지급되지 않게 한다.
-    checker_results = await chk.run_all_checkers(
-        TEAMS, vuln_specs, _round_flags_by_team(current), CHECKER_TOKEN
-    )
-    availability = {
-        team_id: result.health_ok
-        for team_id, result in checker_results.items()
-    }
-
-    # checker가 현재 라운드 flag로 최종 상태를 기록한 뒤 만료 처리한다.
-    fm.expire_round_flags(current)
-
-    # 점수 계산
-    round_result = compute_round_scores(
-        list(TEAMS.keys()), current, availability,
-        ATTACK_REWARD, ATTACK_PENALTY, AVAILABILITY_BONUS,
-    )
-
-    # DB 점수 반영: PoC 점수는 발생 시점에 이미 반영되므로
-    # 라운드 종료 시에는 availability bonus만 적용한다.
-    for team, delta in round_result["availability_score_changes"].items():
-        if delta > 0:
-            db.update_score(team, delta)
-
-    scores_after = {tid: info["score"] for tid, info in db.get_all_scores().items()}
-    exploits = db.get_round_exploits(current)
-
-    db.append_history(
-        current, exploits, availability,
-        round_result["score_changes"], scores_after,
-    )
+    # Freeze the round before scoring. This closes PoC submission and defense
+    # push windows while keeping active flags available for snapshot scoring.
     db.set_round_active(current, False)
 
-    return {
-        "round": current,
-        "exploits": exploits,
-        "availability": availability,
-        "service_statuses": round_result["service_statuses"],
-        "score_changes": round_result["score_changes"],
-        "availability_score_changes": round_result["availability_score_changes"],
-        "poc_score_changes": round_result["poc_score_changes"],
-        "scores_after": scores_after,
-    }
+    snapshot = None
+    scoring_teams = TEAMS
+    if SCORING_SNAPSHOT_ENABLED:
+        snapshot = create_round_snapshot(
+            round_num=current,
+            teams=TEAMS,
+            checker_token=CHECKER_TOKEN,
+            network=SCORING_SNAPSHOT_NETWORK,
+            ip_prefix=SCORING_SNAPSHOT_IP_PREFIX,
+            ip_start=SCORING_SNAPSHOT_IP_START,
+        )
+        scoring_teams = snapshot.teams
+        if SCORING_SNAPSHOT_STARTUP_GRACE_SEC > 0:
+            await asyncio.sleep(SCORING_SNAPSHOT_STARTUP_GRACE_SEC)
+
+    try:
+        # 라운드 종료 snapshot 기준으로 checker를 실행한다.
+        checker_results = await chk.run_all_checkers(
+            scoring_teams, vuln_specs, _round_flags_by_team(current), CHECKER_TOKEN
+        )
+        availability = {
+            team_id: result.health_ok
+            for team_id, result in checker_results.items()
+        }
+
+        # checker가 snapshot에 현재 라운드 flag를 주입/검증한 뒤 제출 PoC를 batch 실행한다.
+        poc_results = _run_pocs(current, teams_override=scoring_teams)
+
+        # checker/PoC가 현재 라운드 flag를 모두 사용한 뒤 만료 처리한다.
+        fm.expire_round_flags(current)
+
+        # 점수 계산
+        round_result = compute_round_scores(
+            list(TEAMS.keys()), current, availability,
+            ATTACK_REWARD, ATTACK_PENALTY, AVAILABILITY_BONUS,
+        )
+
+        # DB 점수 반영: PoC 점수는 batch 실행 시점에 이미 반영되므로
+        # 라운드 종료 시에는 availability bonus만 적용한다.
+        for team, delta in round_result["availability_score_changes"].items():
+            if delta > 0:
+                db.update_score(team, delta)
+
+        scores_after = {tid: info["score"] for tid, info in db.get_all_scores().items()}
+        exploits = db.get_round_exploits(current)
+
+        db.append_history(
+            current, exploits, availability,
+            round_result["score_changes"], scores_after,
+        )
+
+        return {
+            "round": current,
+            "exploits": exploits,
+            "availability": availability,
+            "service_statuses": round_result["service_statuses"],
+            "score_changes": round_result["score_changes"],
+            "availability_score_changes": round_result["availability_score_changes"],
+            "poc_score_changes": round_result["poc_score_changes"],
+            "scores_after": scores_after,
+            "pocs_run": len(poc_results),
+            "scoring_snapshot": {
+                "enabled": bool(snapshot),
+                "images": snapshot.image_tags if snapshot else {},
+            },
+        }
+    finally:
+        if snapshot and not SCORING_SNAPSHOT_KEEP_CONTAINERS:
+            cleanup_round_snapshot(snapshot)
 
 
 @app.post("/admin/preflight-done")
@@ -1433,13 +1507,17 @@ def get_active_flags(x_admin_secret: str = Header(...), round_num: int | None = 
 @app.get("/scoreboard")
 def scoreboard():
     poc_exploit_counts = db.count_successful_pocs_by_attacker()
+    pending_poc_counts = db.count_pending_pocs_by_attacker(state.current_round)
     service_statuses = db.get_service_statuses()
     current_poc_results = []
     for result in db.list_poc_results(round_num=state.current_round, limit=200):
         safe_result = dict(result)
         flags = safe_result.pop("flags", []) or []
+        safe_result.pop("target_team", None)
+        safe_result.pop("defender_team", None)
         safe_result["flags_found"] = len(flags)
         current_poc_results.append(safe_result)
+    queued_pocs = db.list_pending_pocs_public(round_num=state.current_round, limit=200)
     return {
         "round": state.current_round,
         "round_active": state.round_active,
@@ -1452,15 +1530,12 @@ def scoreboard():
                 "turns_used": state.round_attacks.get(tid, 0),
                 "turns_remaining": MAX_ATTACKS_ROUND - state.round_attacks.get(tid, 0),
                 "exploit_count_total": poc_exploit_counts.get(tid, 0),
+                "queued_poc_count": pending_poc_counts.get(tid, 0),
                 "service_status": service_statuses.get(tid, "UNKNOWN"),
-                "attack_targets": get_attack_targets(tid),
             }
             for tid in sorted(TEAMS, key=lambda t: state.scores.get(t, 0), reverse=True)
         ],
-        "round_exploits": [
-            {"attacker": a, "defender": d}
-            for a, d in state.round_exploits
-        ],
+        "queued_pocs": queued_pocs,
         "poc_results": current_poc_results,
     }
 
