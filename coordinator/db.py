@@ -821,15 +821,31 @@ def count_active_poc_submissions_for_vuln(
     row = _get_conn().execute(
         "SELECT COUNT(*) AS cnt FROM poc_submissions "
         "WHERE attacker_team=? AND target_team=? AND flag_id=? AND submitted_round=? "
-        "AND status NOT IN ('rejected', 'merged', 'disabled')",
+        "AND status NOT IN ('rejected', 'merged', 'disabled', 'replaced')",
         (attacker_team, target_team, flag_id, submitted_round),
     ).fetchone()
     return int(row["cnt"]) if row else 0
 
 
+def list_active_poc_submissions_for_vuln(
+    attacker_team: str,
+    target_team: str,
+    flag_id: str,
+    submitted_round: int,
+) -> list[dict]:
+    rows = _get_conn().execute(
+        "SELECT * FROM poc_submissions "
+        "WHERE attacker_team=? AND target_team=? AND flag_id=? AND submitted_round=? "
+        "AND status NOT IN ('rejected', 'merged', 'disabled', 'replaced') "
+        "ORDER BY created_at ASC",
+        (attacker_team, target_team, flag_id, submitted_round),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def get_runnable_pocs(round_num: int, only_poc_id: Optional[str] = None) -> list[dict]:
-    params: list[object] = ["rejected", "merged", "disabled"]
-    where = "WHERE status NOT IN (?,?,?) AND submitted_round=?"
+    params: list[object] = ["rejected", "merged", "disabled", "replaced"]
+    where = "WHERE status NOT IN (?,?,?,?) AND submitted_round=?"
     params.append(round_num)
     if only_poc_id:
         where += " AND id=?"
@@ -931,7 +947,7 @@ def count_pending_pocs_by_attacker(round_num: int) -> dict[str, int]:
     rows = _get_conn().execute(
         "SELECT p.attacker_team, COUNT(*) AS cnt FROM poc_submissions p "
         "LEFT JOIN poc_results r ON r.round_num=p.submitted_round AND r.poc_id=p.id "
-        "WHERE p.submitted_round=? AND p.status NOT IN ('rejected', 'merged', 'disabled') "
+        "WHERE p.submitted_round=? AND p.status NOT IN ('rejected', 'merged', 'disabled', 'replaced') "
         "AND r.id IS NULL GROUP BY p.attacker_team",
         (round_num,),
     ).fetchall()
@@ -943,7 +959,7 @@ def list_pending_pocs_public(round_num: int, limit: int = 100) -> list[dict]:
         "SELECT p.id, p.attacker_team, p.flag_id, p.created_at, p.status "
         "FROM poc_submissions p "
         "LEFT JOIN poc_results r ON r.round_num=p.submitted_round AND r.poc_id=p.id "
-        "WHERE p.submitted_round=? AND p.status NOT IN ('rejected', 'merged', 'disabled') "
+        "WHERE p.submitted_round=? AND p.status NOT IN ('rejected', 'merged', 'disabled', 'replaced') "
         "AND r.id IS NULL ORDER BY p.created_at DESC LIMIT ?",
         (round_num, limit),
     ).fetchall()

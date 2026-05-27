@@ -123,7 +123,8 @@ Blind SQLi처럼 여러 요청이 필요한 풀이는 `poc.py` 안에서 재현�
 - attack agent는 공식 run token으로 타겟 repo를 받고, coordinator wrapper로 타겟 서비스를 탐색합니다.
 - 라운드 중 사람이 직접 `poc.py`를 제출하면 안 됩니다.
 - PoC 제출은 `/agent/pocs`, `submit_poc_source()`, `submit_poc()` 중 하나를 사용합니다.
-- PoC는 라운드당 `공격팀 -> 타겟팀 -> vuln_id` 기준 최대 2개까지 제출할 수 있습니다.
+- PoC는 라운드당 `공격팀 -> 타겟팀 -> vuln_id` 기준 최대 2개까지 queued 상태로 유지됩니다.
+- 같은 기준으로 3번째 PoC를 제출하면 가장 먼저 제출한 queued PoC가 `replaced` 처리되고 새 PoC가 들어갑니다.
 - 제출된 PoC는 즉시 채점하지 않고, 라운드 종료 시점의 scoring snapshot에서 batch 실행합니다.
 
 PoC 규칙:

@@ -281,7 +281,7 @@ class CoreFlowTests(unittest.TestCase):
             self.assertEqual(scores["team1"]["score"], 1010)
             self.assertEqual(scores["team3"]["score"], 990)
 
-    def test_poc_submission_limited_to_two_per_vuln_per_round(self):
+    def test_poc_submission_replaces_oldest_after_two_per_vuln_per_round(self):
         import app as coordinator_app
 
         with tempfile.TemporaryDirectory() as td:
@@ -304,6 +304,7 @@ class CoreFlowTests(unittest.TestCase):
             coordinator_app.DATA_DIR = str(root / "data")
             coordinator_app._run_pocs = lambda round_num, only_poc_id=None: []
             try:
+                poc_ids = []
                 for idx in range(2):
                     result = coordinator_app._submit_poc_content(
                         run=run,
@@ -315,24 +316,30 @@ class CoreFlowTests(unittest.TestCase):
                         content=f"print('attempt {idx}')\n".encode(),
                     )
                     self.assertEqual(result["status"], "submitted")
+                    self.assertIsNone(result["replaced_poc_id"])
+                    poc_ids.append(result["poc_id"])
 
-                with self.assertRaises(coordinator_app.HTTPException) as ctx:
-                    coordinator_app._submit_poc_content(
-                        run=run,
-                        llm_call={"id": llm_id},
-                        attacker_team="team1",
-                        target_team="team2",
-                        flag_id="vuln1",
-                        file_name="poc2.py",
-                        content=b"print('attempt 2')\n",
-                    )
+                result = coordinator_app._submit_poc_content(
+                    run=run,
+                    llm_call={"id": llm_id},
+                    attacker_team="team1",
+                    target_team="team2",
+                    flag_id="vuln1",
+                    file_name="poc2.py",
+                    content=b"print('attempt 2')\n",
+                )
 
-                self.assertEqual(ctx.exception.status_code, 429)
-                self.assertIn("최대 2개", ctx.exception.detail)
+                self.assertEqual(result["status"], "submitted")
+                self.assertEqual(result["replaced_poc_id"], poc_ids[0])
+                self.assertEqual(db.get_poc_submission(poc_ids[0])["status"], "replaced")
                 self.assertEqual(
                     db.count_active_poc_submissions_for_vuln("team1", "team2", "vuln1", 1),
                     2,
                 )
+                runnable_ids = [poc["id"] for poc in db.get_runnable_pocs(1)]
+                self.assertNotIn(poc_ids[0], runnable_ids)
+                self.assertIn(poc_ids[1], runnable_ids)
+                self.assertIn(result["poc_id"], runnable_ids)
             finally:
                 coordinator_app.DATA_DIR = old_data_dir
                 coordinator_app._run_pocs = old_run_pocs

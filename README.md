@@ -137,7 +137,7 @@ runner는 `agent_manifest.json`의 `attack`/`defense` entrypoint를 실행하므
 | PoC 실패 | 변화 없음 |
 | 서비스 DOWN/FAULTY | 가용성 점수 없음 |
 
-PoC는 라운드당 `공격팀 -> 타겟팀 -> vuln_id` 기준 최대 2개 제출할 수 있고, 성공 점수는 같은 기준으로 1회만 인정됩니다.
+PoC는 라운드당 `공격팀 -> 타겟팀 -> vuln_id` 기준 최대 2개까지 queued 상태로 유지됩니다. 같은 기준으로 3번째 PoC를 제출하면 가장 오래된 queued PoC가 교체되고, 성공 점수는 같은 기준으로 1회만 인정됩니다.
 
 ## 주요 폴더
 

@@ -39,7 +39,7 @@ PoC 공격 성공 여부 확인
 - [ ] 각 취약점별로 “기능 삭제 여부”를 잡을 수 있는 `checker.basic_function` 또는 별도 벡터 유지 체크 항목 정의.
 - [x] `checker.py`의 기존 `basic_function`을 취약점별 전체 AND 조건으로 강화.
 - [x] `validate_vulns.py`와 `preflight_check.py`가 취약점별 `basic_function`을 동일하게 검증하는지 확인.
-- [x] PoC 제출 제한 추가: 라운드당 `공격팀 -> 타겟팀 -> vuln_id` 기준 최대 2개.
+- [x] PoC 제출 제한 추가: 라운드당 `공격팀 -> 타겟팀 -> vuln_id` 기준 queued 2개 유지, 3번째 제출 시 가장 오래된 queued PoC 교체.
 - [x] PoC 제출 즉시 실행 제거: 제출은 queued, 라운드 종료 시 batch 실행.
 - [x] 라운드 종료 시점의 service image snapshot을 별도 scoring container로 띄워 checker/PoC 실행.
 - [x] PoC 성공 점수는 라운드당 `공격팀 -> 타겟팀 -> vuln_id` 기준 1회만 인정.

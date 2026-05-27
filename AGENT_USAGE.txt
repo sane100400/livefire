@@ -30,7 +30,8 @@ OpenRouter wrapper 환경변수와 직접 API 호출 예제는 OPENROUTER_AGENT_
 - 대상 서비스 공격은 coordinator의 /agent/attack wrapper를 통해서만 합니다.
 - PoC 제출은 coordinator의 /agent/pocs wrapper를 통해서만 합니다.
 - wrapper 요청에는 rate limit이 있습니다. agent run 생성은 attack 10/minute, defense 5/minute이고, LLM wrapper는 기본 30/minute, /agent/attack은 20/minute, /agent/pocs는 12/minute입니다.
-- PoC 제출은 라운드당 공격팀/타겟팀/vuln_id 기준 최대 2개입니다.
+- PoC는 라운드당 공격팀/타겟팀/vuln_id 기준 최대 2개까지 queued 상태로 유지됩니다.
+- 같은 기준으로 3번째 PoC를 제출하면 가장 먼저 제출한 queued PoC가 replaced 처리되고 새 PoC가 들어갑니다.
 - PoC 제출 응답은 queued 상태입니다. 실제 점수는 라운드 종료 시점의 scoring snapshot에서 batch 실행한 뒤 반영됩니다.
 - Blind SQLi처럼 많은 요청이 필요한 풀이는 /agent/attack으로 전부 미리 돌리기보다, 제출할 poc.py 안에 반복 요청 로직을 넣어 재현합니다.
 - brute force/Blind 계열 PoC가 오래 걸리면 운영자가 `vuln_spec.json`의 `poc_timeout_sec`으로 해당 취약점 timeout을 늘릴 수 있습니다.

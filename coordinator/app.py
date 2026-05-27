@@ -1146,17 +1146,20 @@ def _submit_poc_content(
             "queued": True,
         }
 
-    current_count = db.count_active_poc_submissions_for_vuln(
+    active_pocs = db.list_active_poc_submissions_for_vuln(
         attacker_team,
         target_team,
         flag_id,
         run["round_num"],
     )
-    if current_count >= MAX_POCS_PER_VULN_ROUND:
-        raise HTTPException(
-            429,
-            f"PoC 제출 제한 초과: 라운드당 {attacker_team}->{target_team} {flag_id}는 "
-            f"최대 {MAX_POCS_PER_VULN_ROUND}개까지 제출 가능",
+    replaced_poc_id = None
+    if len(active_pocs) >= MAX_POCS_PER_VULN_ROUND:
+        oldest = active_pocs[0]
+        replaced_poc_id = oldest["id"]
+        db.update_poc_status(
+            replaced_poc_id,
+            "replaced",
+            f"newer PoC submitted for {attacker_team}->{target_team} {flag_id}",
         )
 
     poc_id = str(uuid4())
@@ -1183,6 +1186,7 @@ def _submit_poc_content(
         "status": poc["status"],
         "sha256": poc["sha256"],
         "queued": True,
+        "replaced_poc_id": replaced_poc_id,
     }
 
 
